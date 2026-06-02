@@ -5,10 +5,11 @@ import { ArrowLeft } from 'lucide-react'
 
 interface CommandBarProps {
   module: string
+  subtitle?: string
   children?: React.ReactNode
 }
 
-export default function CommandBar({ module, children }: CommandBarProps) {
+export default function CommandBar({ module, subtitle, children }: CommandBarProps) {
   return (
     <header className="fixed top-0 left-0 right-0 z-50 h-14 bg-surface-0/80 backdrop-blur-xl border-b border-subtle">
       <div className="flex items-center justify-between h-full px-6 max-w-screen-2xl mx-auto">
@@ -25,7 +26,7 @@ export default function CommandBar({ module, children }: CommandBarProps) {
         {/* Center: Module Name + Children */}
         <div className="absolute left-1/2 -translate-x-1/2 flex items-center gap-3">
           <span className="text-xs font-medium tracking-wider uppercase text-text-secondary">
-            {module}
+            {module} {subtitle && <span className="text-text-tertiary">/ {subtitle}</span>}
           </span>
           {children}
         </div>

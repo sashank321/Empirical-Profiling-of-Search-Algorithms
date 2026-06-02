@@ -13,6 +13,8 @@ interface ReasoningStep {
 
 interface ReasoningTimelineProps {
   steps: ReasoningStep[]
+  currentStep?: number
+  onStepClick?: (idx: number) => void
 }
 
 const stepVariants = {
@@ -31,7 +33,7 @@ const stepVariants = {
   },
 }
 
-export default function ReasoningTimeline({ steps }: ReasoningTimelineProps) {
+export default function ReasoningTimeline({ steps, currentStep, onStepClick }: ReasoningTimelineProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -61,7 +63,7 @@ export default function ReasoningTimeline({ steps }: ReasoningTimelineProps) {
         style={{ scrollbarWidth: 'thin' }}
       >
         <AnimatePresence mode="popLayout">
-          {steps.map((step) => (
+          {steps.map((step, idx) => (
             <motion.div
               key={`step-${step.step}`}
               variants={stepVariants}
@@ -69,7 +71,12 @@ export default function ReasoningTimeline({ steps }: ReasoningTimelineProps) {
               animate="animate"
               exit="exit"
               layout
-              className="flex-shrink-0 min-w-[240px] max-w-[280px] bg-surface-1 border-subtle rounded-xl p-4"
+              onClick={() => onStepClick?.(idx)}
+              className={`flex-shrink-0 min-w-[240px] max-w-[280px] bg-surface-1 border-subtle rounded-xl p-4 transition-all duration-200 ${
+                onStepClick ? 'cursor-pointer hover:bg-surface-2' : ''
+              } ${
+                currentStep === idx ? 'border-accent-blue shadow-lg shadow-accent-blue/5' : ''
+              }`}
             >
               <div className="flex items-start gap-3 mb-3">
                 <div className="flex items-center justify-center w-6 h-6 rounded-full bg-surface-3 text-xs font-mono text-text-secondary flex-shrink-0">

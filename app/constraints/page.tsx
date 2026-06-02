@@ -53,7 +53,7 @@ const ACCENT_BG_CLASSES = ['bg-accent-blue', 'bg-accent-green', 'bg-accent-amber
    Shared Sub-components
    ════════════════════════════════════════════ */
 
-function Toggle({ label, enabled, onChange, locked }: { label: string; enabled: boolean; onChange: () => void; locked?: boolean }) {
+function Toggle({ label, enabled, onChange, locked }: { label: string; enabled: boolean; onChange?: () => void; locked?: boolean }) {
   return (
     <button
       onClick={locked ? undefined : onChange}
