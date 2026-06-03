@@ -43,10 +43,20 @@ const config: Config = {
         'xl': '12px',
         '2xl': '16px',
       },
+      boxShadow: {
+        'depth-1': '0 4px 12px rgba(0, 0, 0, 0.5), 0 1px 2px rgba(0, 0, 0, 0.25)',
+        'depth-2': '0 8px 24px rgba(0, 0, 0, 0.6), 0 2px 4px rgba(0, 0, 0, 0.3)',
+        'depth-3': '0 16px 48px rgba(0, 0, 0, 0.7), 0 4px 8px rgba(0, 0, 0, 0.4)',
+      },
+      transitionTimingFunction: {
+        'ease-spring': 'cubic-bezier(0.175, 0.885, 0.32, 1.275)',
+        'ease-out-expo': 'cubic-bezier(0.19, 1, 0.22, 1)',
+      },
       animation: {
         'fade-in': 'fadeIn 0.5s ease-out',
         'slide-up': 'slideUp 0.4s ease-out',
         'pulse-subtle': 'pulseSubtle 2s ease-in-out infinite',
+        'counter': 'counter 2s cubic-bezier(0.19, 1, 0.22, 1) forwards',
       },
       keyframes: {
         fadeIn: {
@@ -60,6 +70,10 @@ const config: Config = {
         pulseSubtle: {
           '0%, 100%': { opacity: '1' },
           '50%': { opacity: '0.7' },
+        },
+        counter: {
+          '0%': { transform: 'translateY(100%)', opacity: '0' },
+          '100%': { transform: 'translateY(0)', opacity: '1' },
         },
       },
     },
