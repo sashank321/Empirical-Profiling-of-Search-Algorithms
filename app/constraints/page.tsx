@@ -508,23 +508,9 @@ export default function ConstraintIntelligenceLabPage() {
   }, [isPlaying, stopPlayback, startPlayback]);
 
   /* ── Solve ── */
-  const handleSolve = useCallback(() => {
+  const handleSolve = useCallback(async () => {
     stopPlayback();
     setIsSolving(true);
-
-    let setup: CSPSetup;
-
-    switch (problem) {
-      case 'nqueens':
-        setup = createNQueens(nQueensSize);
-        break;
-      case 'coloring':
-        setup = createGraphColoring(DEFAULT_GRAPH_NODES, DEFAULT_GRAPH_EDGES, nColors);
-        break;
-      case 'timetable':
-        setup = createTimetable();
-        break;
-    }
 
     const options: CSPOptions = {
       useForwardChecking: toggles.forwardChecking,
@@ -533,8 +519,32 @@ export default function ConstraintIntelligenceLabPage() {
       useAC3: toggles.ac3,
     };
 
-    setTimeout(() => {
-      const cspResult = solveCSP(setup.variables, setup.domains, setup.isConsistent, options);
+    let problemKey = problem as string;
+    if (problem === 'nqueens') problemKey = 'n_queens';
+    if (problem === 'coloring') problemKey = 'graph_coloring';
+    if (problem === 'timetable') problemKey = 'timetabling';
+
+    try {
+      const response = await fetch('http://localhost:5000/api/csp/execute', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          problem: problemKey,
+          n: nQueensSize,
+          nodes: DEFAULT_GRAPH_NODES,
+          edges: DEFAULT_GRAPH_EDGES,
+          nColors: nColors,
+          options: options
+        })
+      });
+
+      const cspResult = await response.json();
+      if (cspResult.error) {
+         console.error("Backend error:", cspResult.error);
+         setIsSolving(false);
+         return;
+      }
+
       setResult(cspResult);
       setCurrentStep(-1);
       setIsSolving(false);
@@ -565,7 +575,10 @@ export default function ConstraintIntelligenceLabPage() {
         };
         animFrameRef.current = requestAnimationFrame(tick);
       }, 100);
-    }, 30);
+    } catch (err) {
+      console.error("Failed to fetch from Python backend:", err);
+      setIsSolving(false);
+    }
   }, [problem, nQueensSize, nColors, toggles, stopPlayback, speed]);
 
   /* ── Reset ── */

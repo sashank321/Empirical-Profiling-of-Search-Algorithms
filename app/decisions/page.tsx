@@ -15,6 +15,7 @@ export default function DecisionsPage() {
   const [result, setResult] = useState<MinimaxResult | null>(null)
   const [gameStatus, setGameStatus] = useState<string>('Your turn (O)')
   const [history, setHistory] = useState<{ board: Cell[]; move: string }[]>([])
+  const [isThinking, setIsThinking] = useState(false)
 
   const reset = () => {
     setBoard(Array(9).fill(null))
@@ -23,18 +24,36 @@ export default function DecisionsPage() {
     setHistory([])
   }
 
-  const aiMove = useCallback((b: Cell[]) => {
-    const r = algo === 'minimax' ? runMinimax(b, true) : runAlphaBeta(b, true)
-    setResult(r)
-    if (!r.bestMove) return b
-    const idx = parseInt(r.bestMove.split('→')[1])
-    const nb = [...b]; nb[idx] = 'X'
-    setHistory(h => [...h, { board: nb, move: `AI plays X at ${idx}` }])
-    return nb
+  const aiMove = useCallback(async (b: Cell[]) => {
+    try {
+      const resp = await fetch('http://localhost:5000/api/decision/execute', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          problem: 'tic_tac_toe',
+          board: b,
+          useAlphaBeta: algo === 'alphabeta'
+        })
+      });
+      const r = await resp.json();
+      if (r.error) {
+        console.error(r.error);
+        return b;
+      }
+      setResult(r);
+      if (!r.bestMove || r.bestMove === "Move→-1") return b;
+      const idx = parseInt(r.bestMove.split('→')[1])
+      const nb = [...b]; nb[idx] = 'X'
+      setHistory(h => [...h, { board: nb, move: `AI plays X at ${idx}` }])
+      return nb
+    } catch (err) {
+      console.error(err);
+      return b;
+    }
   }, [algo])
 
-  const handleClick = (i: number) => {
-    if (board[i] || checkWinner(board)) return
+  const handleClick = async (i: number) => {
+    if (board[i] || checkWinner(board) || isThinking) return
     const nb = [...board]; nb[i] = 'O'
     setHistory(h => [...h, { board: nb, move: `You play O at ${i}` }])
 
@@ -42,11 +61,17 @@ export default function DecisionsPage() {
     if (w1) { setBoard(nb); setGameStatus(w1 === 'draw' ? 'Draw!' : `${w1} wins!`); return }
     if (getAvailableMoves(nb).length === 0) { setBoard(nb); setGameStatus('Draw!'); return }
 
-    const afterAI = aiMove(nb)
+    setBoard(nb)
+    setGameStatus('AI is thinking...')
+    setIsThinking(true)
+    
+    const afterAI = await aiMove(nb)
+    
     const w2 = checkWinner(afterAI)
-    if (w2) { setBoard(afterAI); setGameStatus(w2 === 'draw' ? 'Draw!' : `${w2} wins!`); return }
+    if (w2) { setBoard(afterAI); setGameStatus(w2 === 'draw' ? 'Draw!' : `${w2} wins!`); setIsThinking(false); return }
     setBoard(afterAI)
     setGameStatus('Your turn (O)')
+    setIsThinking(false)
   }
 
   const posLabel = (i: number) => ['TL','TC','TR','ML','MC','MR','BL','BC','BR'][i]

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Play,
@@ -49,16 +49,16 @@ const ALGORITHMS: AlgorithmInfo[] = [
 
 /* ─── Default graph (10 nodes: A–J) ─── */
 const DEFAULT_NODES: GraphNode[] = [
-  { id: 'A', x: 120, y: 80, label: 'A' },
-  { id: 'B', x: 280, y: 60, label: 'B' },
-  { id: 'C', x: 80, y: 220, label: 'C' },
-  { id: 'D', x: 260, y: 200, label: 'D' },
-  { id: 'E', x: 440, y: 120, label: 'E' },
-  { id: 'F', x: 420, y: 280, label: 'F' },
-  { id: 'G', x: 180, y: 360, label: 'G' },
-  { id: 'H', x: 560, y: 200, label: 'H' },
-  { id: 'I', x: 340, y: 400, label: 'I' },
-  { id: 'J', x: 540, y: 380, label: 'J' },
+  { id: 'A', x: 150, y: 100, label: 'A' },
+  { id: 'B', x: 350, y: 80, label: 'B' },
+  { id: 'C', x: 100, y: 300, label: 'C' },
+  { id: 'D', x: 300, y: 280, label: 'D' },
+  { id: 'E', x: 550, y: 150, label: 'E' },
+  { id: 'F', x: 500, y: 350, label: 'F' },
+  { id: 'G', x: 200, y: 500, label: 'G' },
+  { id: 'H', x: 750, y: 250, label: 'H' },
+  { id: 'I', x: 400, y: 520, label: 'I' },
+  { id: 'J', x: 650, y: 480, label: 'J' },
 ];
 
 const DEFAULT_EDGES: GraphEdge[] = [
@@ -78,34 +78,7 @@ const DEFAULT_EDGES: GraphEdge[] = [
   { from: 'I', to: 'J', weight: 5 },
 ];
 
-/* Build undirected adjacency */
-function buildAdjacency(edges: GraphEdge[]): Record<string, Record<string, number>> {
-  const adj: Record<string, Record<string, number>> = {};
-  for (const node of DEFAULT_NODES) {
-    adj[node.id] = {};
-  }
-  for (const edge of edges) {
-    adj[edge.from][edge.to] = edge.weight;
-    adj[edge.to][edge.from] = edge.weight;
-  }
-  return adj;
-}
-
-const ADJACENCY = buildAdjacency(DEFAULT_EDGES);
-
-/* Heuristic: straight-line estimate to default goal 'J' */
-const HEURISTIC: Record<string, number> = {
-  A: 14,
-  B: 12,
-  C: 11,
-  D: 9,
-  E: 7,
-  F: 5,
-  G: 8,
-  H: 3,
-  I: 4,
-  J: 0,
-};
+/* These are used as defaults for initialization */
 
 /* ─── Node status for visualization ─── */
 type NodeStatus = 'default' | 'visited' | 'frontier' | 'path' | 'current' | 'start' | 'goal';
@@ -197,63 +170,113 @@ export default function SearchPage() {
   const [isComplete, setIsComplete] = useState(false);
   const [compareMode, setCompareMode] = useState(false);
   const [compareResults, setCompareResults] = useState<SearchResult[]>([]);
+  const [nodes, setNodes] = useState<GraphNode[]>(DEFAULT_NODES);
+  const [edges, setEdges] = useState<GraphEdge[]>(DEFAULT_EDGES);
+  const [isDirected, setIsDirected] = useState(false);
+  const [editMode, setEditMode] = useState(false);
+  const [activeTab, setActiveTab] = useState<'graph' | 'tree' | 'xai'>('graph');
+  const [selectedElement, setSelectedElement] = useState<{type: 'node' | 'edge', id: string} | null>(null);
+  
+  // For edge creation interaction
+  const [edgeSourceNode, setEdgeSourceNode] = useState<string | null>(null);
+
+  const adjacency = useMemo(() => {
+    const adj: Record<string, Record<string, number>> = {};
+    for (const node of nodes) {
+      adj[node.id] = {};
+    }
+    for (const edge of edges) {
+      if (adj[edge.from] && adj[edge.to]) {
+        adj[edge.from][edge.to] = edge.weight;
+        if (!isDirected) {
+          adj[edge.to][edge.from] = edge.weight;
+        }
+      }
+    }
+    return adj;
+  }, [nodes, edges, isDirected]);
+
+  const heuristic = React.useMemo(() => {
+    const h: Record<string, number> = {};
+    const goal = nodes.find(n => n.id === goalNode);
+    if (!goal) return h;
+    for (const node of nodes) {
+      const dist = Math.sqrt(Math.pow(node.x - goal.x, 2) + Math.pow(node.y - goal.y, 2));
+      h[node.id] = Math.round(dist / 40); // Scaled estimate
+    }
+    return h;
+  }, [nodes, goalNode]);
 
   const animationRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const nodeIds = DEFAULT_NODES.map((n) => n.id);
+  const nodeIds = nodes.map((n) => n.id);
 
-  /* Run selected algorithm */
-  const execute = useCallback(() => {
+  const algoInfo = ALGORITHMS.find((a) => a.id === selectedAlgo)!;
+
+  /* Run selected algorithm via Python Backend */
+  const execute = useCallback(async () => {
     if (isAnimating) return;
     setIsComplete(false);
     setCurrentStepIndex(-1);
     setCompareResults([]);
 
-    let res: SearchResult;
-    switch (selectedAlgo) {
-      case 'bfs': res = bfs(ADJACENCY, startNode, goalNode); break;
-      case 'dfs': res = dfs(ADJACENCY, startNode, goalNode); break;
-      case 'ucs': res = ucs(ADJACENCY, startNode, goalNode); break;
-      case 'gbfs': res = gbfs(ADJACENCY, startNode, goalNode, HEURISTIC); break;
-      case 'astar': res = astar(ADJACENCY, startNode, goalNode, HEURISTIC); break;
-      case 'dijkstra': res = dijkstra(ADJACENCY, startNode, goalNode); break;
-      case 'iddfs': res = iddfs(ADJACENCY, startNode, goalNode); break;
-      case 'idaStar': res = idaStar(ADJACENCY, startNode, goalNode, HEURISTIC); break;
-      default: res = bfs(ADJACENCY, startNode, goalNode);
-    }
-    setResult(res);
-
-    if (compareMode) {
-      const all = ALGORITHMS.map((a) => {
-        switch (a.id) {
-          case 'bfs': return bfs(ADJACENCY, startNode, goalNode);
-          case 'dfs': return dfs(ADJACENCY, startNode, goalNode);
-          case 'ucs': return ucs(ADJACENCY, startNode, goalNode);
-          case 'gbfs': return gbfs(ADJACENCY, startNode, goalNode, HEURISTIC);
-          case 'astar': return astar(ADJACENCY, startNode, goalNode, HEURISTIC);
-          case 'dijkstra': return dijkstra(ADJACENCY, startNode, goalNode);
-          case 'iddfs': return iddfs(ADJACENCY, startNode, goalNode);
-          case 'idaStar': return idaStar(ADJACENCY, startNode, goalNode, HEURISTIC);
-          default: return bfs(ADJACENCY, startNode, goalNode);
-        }
+    try {
+      const response = await fetch('http://localhost:5000/api/search/execute', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          algorithm: selectedAlgo,
+          adjacency: adjacency,
+          start: startNode,
+          goal: goalNode,
+          heuristic: algoInfo.needsHeuristic ? heuristic : {}
+        })
       });
-      setCompareResults(all);
-    }
-
-    /* Animate steps */
-    setIsAnimating(true);
-    let step = 0;
-    const animate = () => {
-      if (step < res.steps.length) {
-        setCurrentStepIndex(step);
-        step++;
-        animationRef.current = setTimeout(animate, speed);
-      } else {
-        setIsAnimating(false);
-        setIsComplete(true);
+      
+      const res = await response.json();
+      if (res.error) {
+        console.error("Backend error:", res.error);
+        return;
       }
-    };
-    animationRef.current = setTimeout(animate, 300);
-  }, [selectedAlgo, startNode, goalNode, speed, isAnimating, compareMode]);
+      setResult(res);
+
+      if (compareMode) {
+        const fetchPromises = ALGORITHMS.map(async (a) => {
+          const resp = await fetch('http://localhost:5000/api/search/execute', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              algorithm: a.id,
+              adjacency: adjacency,
+              start: startNode,
+              goal: goalNode,
+              heuristic: a.needsHeuristic ? heuristic : {}
+            })
+          });
+          return await resp.json();
+        });
+        const all = await Promise.all(fetchPromises);
+        setCompareResults(all.filter((r) => !r.error));
+      }
+
+      /* Animate steps */
+      setIsAnimating(true);
+      let step = 0;
+      const animate = () => {
+        if (step < res.steps.length) {
+          setCurrentStepIndex(step);
+          step++;
+          animationRef.current = setTimeout(animate, speed);
+        } else {
+          setIsAnimating(false);
+          setIsComplete(true);
+        }
+      };
+      animationRef.current = setTimeout(animate, 300);
+      
+    } catch (err) {
+      console.error("Failed to fetch from Python backend:", err);
+    }
+  }, [selectedAlgo, startNode, goalNode, speed, isAnimating, compareMode, algoInfo]);
 
   /* Reset */
   const reset = useCallback(() => {
@@ -263,7 +286,56 @@ export default function SearchPage() {
     setIsAnimating(false);
     setIsComplete(false);
     setCompareResults([]);
+    setSelectedElement(null);
+    setEdgeSourceNode(null);
   }, []);
+
+  /* Graph Builder Handlers */
+  const handleSvgClick = (e: React.MouseEvent<SVGSVGElement>) => {
+    if (!editMode || isAnimating) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = Math.round(e.clientX - rect.left);
+    const y = Math.round(e.clientY - rect.top);
+    
+    let nextLetter = 'A';
+    for (let i = 0; i < 26; i++) {
+      const char = String.fromCharCode(65 + i);
+      if (!nodes.find(n => n.id === char)) {
+        nextLetter = char;
+        break;
+      }
+    }
+    const newNode = { id: nextLetter, x, y, label: nextLetter };
+    setNodes(prev => [...prev, newNode]);
+    setEdgeSourceNode(null);
+    setSelectedElement(null);
+  };
+
+  const handleNodeClick = (e: React.MouseEvent, nodeId: string) => {
+    if (!editMode || isAnimating) return;
+    e.stopPropagation();
+    
+    if (edgeSourceNode) {
+       if (edgeSourceNode !== nodeId) {
+          const existing = edges.find(ed => (ed.from === edgeSourceNode && ed.to === nodeId) || (!isDirected && ed.from === nodeId && ed.to === edgeSourceNode));
+          if (!existing) {
+             setEdges(prev => [...prev, { from: edgeSourceNode, to: nodeId, weight: 1 }]);
+          }
+       }
+       setEdgeSourceNode(null);
+       setSelectedElement(null);
+    } else {
+       setSelectedElement({ type: 'node', id: nodeId });
+       setEdgeSourceNode(nodeId);
+    }
+  };
+
+  const handleEdgeClick = (e: React.MouseEvent, from: string, to: string) => {
+    if (!editMode || isAnimating) return;
+    e.stopPropagation();
+    setSelectedElement({ type: 'edge', id: `${from}-${to}` });
+    setEdgeSourceNode(null);
+  };
 
   /* Cleanup on unmount */
   useEffect(() => {
@@ -278,15 +350,13 @@ export default function SearchPage() {
       ? result.steps[currentStepIndex]
       : null;
 
-  const algoInfo = ALGORITHMS.find((a) => a.id === selectedAlgo)!;
-
   return (
     <div className="min-h-screen bg-surface-0 flex flex-col">
       <CommandBar module="Search Intelligence Lab" subtitle={algoInfo.name} />
 
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex flex-1 overflow-hidden flex-col md:flex-row relative">
         {/* ── Left Panel: Controls ── */}
-        <aside className="w-64 bg-surface-1 border-r border-subtle flex flex-col overflow-y-auto flex-shrink-0">
+        <aside className="w-full md:w-64 min-w-[16rem] bg-surface-1 border-r border-subtle flex flex-col overflow-y-visible flex-shrink-0 z-20">
           {/* Algorithm Selector */}
           <div className="p-5 border-b border-subtle">
             <div className="flex items-center gap-2 mb-4">
@@ -386,6 +456,51 @@ export default function SearchPage() {
             </button>
           </div>
 
+          {/* Edit Mode */}
+          <div className="p-5 border-b border-subtle">
+            <button
+              onClick={() => {
+                setEditMode(!editMode);
+                setEdgeSourceNode(null);
+                setSelectedElement(null);
+              }}
+              className={`flex items-center gap-2 w-full px-3 py-2 rounded-xl text-sm transition-all duration-200 border ${
+                editMode
+                  ? 'bg-surface-3 border-accent-blue/30 text-accent-blue'
+                  : 'bg-surface-1 border-subtle text-text-secondary hover:bg-surface-2'
+              }`}
+            >
+              <Waypoints className="w-3.5 h-3.5" />
+              <span className="text-xs font-medium">Edit Mode</span>
+            </button>
+            {editMode && (
+              <div className="mt-3 flex flex-col gap-1.5">
+                <button
+                  onClick={() => {
+                     setNodes([]); setEdges([]); setStartNode(''); setGoalNode('');
+                  }}
+                  className="text-[10px] text-text-tertiary hover:text-white text-left px-2 py-1 rounded hover:bg-surface-2 transition-colors"
+                >
+                  Clear Canvas
+                </button>
+                <button
+                  onClick={() => {
+                     setNodes(DEFAULT_NODES); setEdges(DEFAULT_EDGES); setStartNode('A'); setGoalNode('J');
+                  }}
+                  className="text-[10px] text-text-tertiary hover:text-white text-left px-2 py-1 rounded hover:bg-surface-2 transition-colors"
+                >
+                  Reset Default Graph
+                </button>
+                <button
+                  onClick={() => setIsDirected(!isDirected)}
+                  className="text-[10px] text-text-tertiary hover:text-white text-left px-2 py-1 rounded hover:bg-surface-2 transition-colors"
+                >
+                  {isDirected ? 'Make Undirected' : 'Make Directed'}
+                </button>
+              </div>
+            )}
+          </div>
+
           {/* Action Buttons */}
           <div className="p-5 flex flex-col gap-2 mt-auto">
             <button
@@ -406,9 +521,30 @@ export default function SearchPage() {
           </div>
         </aside>
 
-        {/* ── Center: Graph Visualizer ── */}
+        {/* ── Center: Visualization & Data ── */}
         <main className="flex-1 flex flex-col overflow-hidden">
+          {/* Top Tab Navigation */}
+          <div className="flex items-center gap-6 px-6 py-3 border-b border-subtle bg-surface-0/50">
+            {(['graph', 'tree', 'xai'] as const).map((tab) => (
+              <button
+                key={tab}
+                onClick={() => setActiveTab(tab)}
+                className={`text-xs font-medium uppercase tracking-wider pb-3 border-b-2 transition-colors ${
+                  activeTab === tab
+                    ? 'border-white text-white'
+                    : 'border-transparent text-text-tertiary hover:text-text-secondary'
+                }`}
+                style={{ marginBottom: '-13px' }}
+              >
+                {tab === 'graph' ? 'Graph View' : tab === 'tree' ? 'Search Tree' : 'XAI Data'}
+              </button>
+            ))}
+          </div>
+
           <div className="flex-1 relative overflow-hidden">
+            {/* Conditional Views */}
+            {activeTab === 'graph' && (
+              <>
             {/* Status bar */}
             <div className="absolute top-4 left-4 z-10 flex items-center gap-3">
               {isAnimating && (
@@ -440,26 +576,82 @@ export default function SearchPage() {
             </div>
 
             {/* Heuristic legend (for heuristic algorithms) */}
-            {algoInfo.needsHeuristic && (
+            {algoInfo.needsHeuristic && !editMode && (
               <div className="absolute top-4 right-4 z-10 px-3 py-2 rounded-lg bg-surface-2 border border-subtle">
                 <span className="text-[10px] font-medium text-text-tertiary uppercase tracking-wider block mb-1.5">
                   Heuristic h(n) to {goalNode}
                 </span>
                 <div className="grid grid-cols-5 gap-x-3 gap-y-0.5">
-                  {DEFAULT_NODES.map((node) => (
+                  {nodes.map((node) => (
                     <span key={node.id} className="text-[10px] font-mono text-text-secondary">
-                      {node.id}:{HEURISTIC[node.id]}
+                      {node.id}:{heuristic[node.id]}
                     </span>
                   ))}
                 </div>
               </div>
             )}
 
+            {/* Selected Element Edit Panel */}
+            {editMode && selectedElement && (
+              <div className="absolute top-4 right-4 z-20 p-4 rounded-xl bg-surface-1 border border-subtle w-48 shadow-lg">
+                <div className="flex justify-between items-center mb-3">
+                  <span className="text-xs font-medium text-white">
+                    Edit {selectedElement.type === 'node' ? 'Node' : 'Edge'}
+                  </span>
+                  <button onClick={() => setSelectedElement(null)} className="text-text-tertiary hover:text-white">✕</button>
+                </div>
+                {selectedElement.type === 'node' ? (
+                  <div className="flex flex-col gap-2">
+                    <label className="text-[10px] text-text-tertiary uppercase tracking-wider">Label</label>
+                    <input 
+                      type="text" 
+                      maxLength={3}
+                      value={nodes.find(n => n.id === selectedElement.id)?.label || ''}
+                      onChange={(e) => setNodes(nodes.map(n => n.id === selectedElement.id ? {...n, label: e.target.value} : n))}
+                      className="bg-surface-2 border border-subtle rounded-lg px-2 py-1 text-sm text-white focus:outline-none focus:border-border-active"
+                    />
+                    <button 
+                      onClick={() => {
+                        setNodes(nodes.filter(n => n.id !== selectedElement.id));
+                        setEdges(edges.filter(e => e.from !== selectedElement.id && e.to !== selectedElement.id));
+                        setSelectedElement(null);
+                      }}
+                      className="mt-2 w-full py-1.5 bg-accent-red/10 text-accent-red rounded-lg text-xs hover:bg-accent-red/20 transition-colors"
+                    >
+                      Delete Node
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-2">
+                    <label className="text-[10px] text-text-tertiary uppercase tracking-wider">Weight</label>
+                    <input 
+                      type="number"
+                      min={1}
+                      max={99}
+                      value={edges.find(e => `${e.from}-${e.to}` === selectedElement.id)?.weight || 1}
+                      onChange={(e) => setEdges(edges.map(ed => `${ed.from}-${ed.to}` === selectedElement.id ? {...ed, weight: Number(e.target.value)} : ed))}
+                      className="bg-surface-2 border border-subtle rounded-lg px-2 py-1 text-sm text-white focus:outline-none focus:border-border-active"
+                    />
+                    <button 
+                      onClick={() => {
+                        setEdges(edges.filter(e => `${e.from}-${e.to}` !== selectedElement.id));
+                        setSelectedElement(null);
+                      }}
+                      className="mt-2 w-full py-1.5 bg-accent-red/10 text-accent-red rounded-lg text-xs hover:bg-accent-red/20 transition-colors"
+                    >
+                      Delete Edge
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* SVG Graph */}
             <svg
-              viewBox="0 0 680 480"
-              className="w-full h-full"
+              viewBox="0 0 850 600"
+              className={`w-full h-full ${editMode ? 'cursor-crosshair' : ''}`}
               style={{ minHeight: 400 }}
+              onClick={handleSvgClick}
             >
               {/* Glow filter */}
               <defs>
@@ -493,9 +685,11 @@ export default function SearchPage() {
               </defs>
 
               {/* Edges */}
-              {DEFAULT_EDGES.map((edge) => {
-                const fromNode = DEFAULT_NODES.find((n) => n.id === edge.from)!;
-                const toNode = DEFAULT_NODES.find((n) => n.id === edge.to)!;
+              {edges.map((edge) => {
+                const fromNode = nodes.find((n) => n.id === edge.from);
+                const toNode = nodes.find((n) => n.id === edge.to);
+                if (!fromNode || !toNode) return null;
+
                 const isPathEdge =
                   isComplete &&
                   result &&
@@ -504,21 +698,36 @@ export default function SearchPage() {
                     (n, i) =>
                       i < result.path.length - 1 &&
                       ((n === edge.from && result.path[i + 1] === edge.to) ||
-                        (n === edge.to && result.path[i + 1] === edge.from))
+                        (!isDirected && n === edge.to && result.path[i + 1] === edge.from))
                   );
+                  
+                const isSelected = selectedElement?.id === `${edge.from}-${edge.to}`;
 
                 const mx = (fromNode.x + toNode.x) / 2;
                 const my = (fromNode.y + toNode.y) / 2;
 
                 return (
-                  <g key={`${edge.from}-${edge.to}`}>
+                  <g 
+                    key={`${edge.from}-${edge.to}`} 
+                    onClick={(e) => handleEdgeClick(e, edge.from, edge.to)}
+                    className={editMode ? "cursor-pointer" : ""}
+                  >
+                    {/* Invisible thicker line for easier clicking */}
+                    {editMode && (
+                      <line
+                        x1={fromNode.x} y1={fromNode.y}
+                        x2={toNode.x} y2={toNode.y}
+                        stroke="transparent"
+                        strokeWidth={20}
+                      />
+                    )}
                     <line
                       x1={fromNode.x}
                       y1={fromNode.y}
                       x2={toNode.x}
                       y2={toNode.y}
-                      stroke={isPathEdge ? '#ffffff' : 'rgba(255,255,255,0.08)'}
-                      strokeWidth={isPathEdge ? 2.5 : 1}
+                      stroke={isPathEdge ? '#ffffff' : isSelected ? '#3b82f6' : 'rgba(255,255,255,0.08)'}
+                      strokeWidth={isPathEdge || isSelected ? 2.5 : 1}
                       className="transition-all duration-300"
                     />
                     <rect
@@ -527,8 +736,8 @@ export default function SearchPage() {
                       width={20}
                       height={16}
                       rx={4}
-                      fill={isPathEdge ? '#1a1a1a' : '#0a0a0a'}
-                      stroke={isPathEdge ? 'rgba(255,255,255,0.2)' : 'rgba(255,255,255,0.06)'}
+                      fill={isPathEdge ? '#1a1a1a' : isSelected ? '#1e3a8a' : '#0a0a0a'}
+                      stroke={isPathEdge ? 'rgba(255,255,255,0.2)' : isSelected ? '#60a5fa' : 'rgba(255,255,255,0.06)'}
                       strokeWidth={0.5}
                     />
                     <text
@@ -536,7 +745,7 @@ export default function SearchPage() {
                       y={my + 4}
                       textAnchor="middle"
                       className="text-[10px] font-mono"
-                      fill={isPathEdge ? '#ffffff' : '#71717a'}
+                      fill={isPathEdge || isSelected ? '#ffffff' : '#71717a'}
                     >
                       {edge.weight}
                     </text>
@@ -545,7 +754,7 @@ export default function SearchPage() {
               })}
 
               {/* Nodes */}
-              {DEFAULT_NODES.map((node) => {
+              {nodes.map((node) => {
                 const status = getNodeStatus(
                   node.id,
                   currentStep,
@@ -554,7 +763,17 @@ export default function SearchPage() {
                   goalNode,
                   isComplete
                 );
-                const colors = nodeColors(status);
+                let colors = nodeColors(status);
+                
+                // Override for Edit Mode selection
+                const isSelected = selectedElement?.id === node.id;
+                const isEdgeSource = edgeSourceNode === node.id;
+                if (editMode) {
+                  if (isSelected || isEdgeSource) {
+                     colors = { fill: '#1e3a8a', stroke: '#3b82f6', textColor: '#ffffff' };
+                  }
+                }
+
                 const glowFilter =
                   status === 'current'
                     ? 'url(#glow-current)'
@@ -565,14 +784,19 @@ export default function SearchPage() {
                     : undefined;
 
                 return (
-                  <g key={node.id} filter={glowFilter}>
+                  <g 
+                    key={node.id} 
+                    filter={!editMode ? glowFilter : undefined}
+                    onClick={(e) => handleNodeClick(e, node.id)}
+                    className={editMode ? "cursor-pointer hover:opacity-80" : ""}
+                  >
                     <circle
                       cx={node.x}
                       cy={node.y}
                       r={20}
                       fill={colors.fill}
                       stroke={colors.stroke}
-                      strokeWidth={status === 'current' || status === 'path' ? 2.5 : 1.5}
+                      strokeWidth={status === 'current' || status === 'path' || isSelected || isEdgeSource ? 2.5 : 1.5}
                       className="transition-all duration-300"
                     />
                     <text
@@ -586,7 +810,7 @@ export default function SearchPage() {
                       {node.label ?? node.id}
                     </text>
                     {/* h(n) label for heuristic algos */}
-                    {algoInfo.needsHeuristic && (
+                    {algoInfo.needsHeuristic && !editMode && (
                       <text
                         x={node.x}
                         y={node.y - 26}
@@ -594,7 +818,7 @@ export default function SearchPage() {
                         fill="#71717a"
                         className="text-[9px] font-mono"
                       >
-                        h={HEURISTIC[node.id]}
+                        h={heuristic[node.id]}
                       </text>
                     )}
                   </g>
@@ -625,26 +849,99 @@ export default function SearchPage() {
                 ))}
               </g>
             </svg>
+            </>
+          )}
+
+          {activeTab === 'tree' && (
+            <div className="w-full h-full flex flex-col items-center justify-center text-text-tertiary p-8 overflow-auto">
+              {/* Simple Search Tree Placeholder - can be expanded with real tree layout */}
+              <div className="text-center mb-8">
+                <Waypoints className="w-8 h-8 mx-auto mb-3 opacity-50" />
+                <h3 className="text-sm font-medium text-white mb-1">Search Tree Visualization</h3>
+                <p className="text-xs">Tree structure dynamically expands as steps progress.</p>
+              </div>
+              {result && (
+                <div className="flex flex-col gap-4 w-full max-w-2xl">
+                   <div className="bg-surface-1 border border-subtle p-4 rounded-xl">
+                      <span className="text-xs text-text-secondary mb-2 block uppercase tracking-wider">Root</span>
+                      <div className="px-3 py-1.5 bg-surface-2 rounded border border-subtle w-max text-xs">{startNode}</div>
+                   </div>
+                   {currentStep?.frontier.length ? (
+                      <div className="bg-surface-1 border border-subtle p-4 rounded-xl">
+                        <span className="text-xs text-accent-amber mb-2 block uppercase tracking-wider">Current Frontier Branches</span>
+                        <div className="flex flex-wrap gap-2">
+                           {currentStep.frontier.map(f => (
+                              <div key={f.id} className="px-3 py-1.5 bg-surface-3 border border-accent-amber/30 rounded text-xs text-accent-amber">
+                                 {f.id} (cost: {f.f ?? f.g ?? '-'})
+                              </div>
+                           ))}
+                        </div>
+                      </div>
+                   ) : null}
+                </div>
+              )}
+            </div>
+          )}
+
+          {activeTab === 'xai' && (
+            <div className="w-full h-full p-8 overflow-auto">
+              <h3 className="text-lg font-semibold text-white mb-6 tracking-wide">Explainable AI (XAI) Trace</h3>
+              {!result ? (
+                 <p className="text-sm text-text-tertiary">Run an algorithm to see the XAI trace.</p>
+              ) : (
+                 <div className="flex flex-col gap-3">
+                    {result.steps.slice(0, currentStepIndex + 1).map((step, idx) => (
+                       <div key={idx} className={`p-4 rounded-xl border ${idx === currentStepIndex ? 'bg-surface-2 border-accent-blue/50' : 'bg-surface-1 border-subtle'}`}>
+                          <div className="flex items-center justify-between mb-2">
+                             <span className="text-xs font-mono text-text-secondary">Step {idx + 1}</span>
+                             <span className={`text-[10px] uppercase tracking-wider px-2 py-0.5 rounded-full ${step.action === 'goal' ? 'bg-accent-green/20 text-accent-green' : 'bg-surface-3 text-text-secondary'}`}>
+                               {step.action}
+                             </span>
+                          </div>
+                          <div className="text-sm text-white font-medium mb-1">
+                            Current Node: <span className="text-accent-blue">{step.node}</span>
+                          </div>
+                          <div className="text-xs text-text-tertiary mb-3">
+                            Reason: {step.reason}
+                          </div>
+                          <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                             <div className="bg-surface-0 p-2 rounded border border-subtle">
+                                <div className="text-[10px] text-text-tertiary uppercase tracking-wider">Frontier Size</div>
+                                <div className="text-xs font-mono mt-0.5">{step.frontier.length}</div>
+                             </div>
+                             <div className="bg-surface-0 p-2 rounded border border-subtle">
+                                <div className="text-[10px] text-text-tertiary uppercase tracking-wider">Visited</div>
+                                <div className="text-xs font-mono mt-0.5">{step.visited.length}</div>
+                             </div>
+                          </div>
+                       </div>
+                    ))}
+                 </div>
+              )}
+            </div>
+          )}
           </div>
 
-          {/* Compare Mode Table */}
+          {/* ── Compare Mode Panel ── */}
           <AnimatePresence>
             {compareMode && compareResults.length > 0 && (
               <motion.div
                 initial={{ opacity: 0, height: 0 }}
                 animate={{ opacity: 1, height: 'auto' }}
                 exit={{ opacity: 0, height: 0 }}
-                className="border-t border-subtle bg-surface-1 overflow-x-auto"
+                className="border-t border-subtle bg-surface-1 overflow-hidden flex flex-col max-h-[300px]"
               >
-                <div className="p-4">
-                  <div className="flex items-center gap-2 mb-3">
+                <div className="p-4 border-b border-subtle shrink-0">
+                  <div className="flex items-center gap-2">
                     <Waypoints className="w-4 h-4 text-accent-purple" />
                     <span className="text-xs font-medium text-text-tertiary uppercase tracking-wider">
                       Comparison Results
                     </span>
                   </div>
+                </div>
+                <div className="overflow-auto min-h-0 flex-1 relative">
                   <table className="w-full text-xs">
-                    <thead>
+                    <thead className="sticky top-0 bg-surface-1 z-10 shadow-sm">
                       <tr className="border-b border-subtle">
                         {['Algorithm', 'Nodes', 'Peak Frontier', 'Path Cost', 'Time (ms)', 'Path'].map(
                           (h) => (
@@ -660,6 +957,17 @@ export default function SearchPage() {
                     </thead>
                     <tbody>
                       {compareResults.map((r) => {
+                        const stepLimit = isAnimating || !isComplete ? currentStepIndex : r.steps.length - 1;
+                        const boundedStep = Math.max(0, Math.min(stepLimit, r.steps.length - 1));
+                        const stepData = r.steps[boundedStep];
+                        const finished = boundedStep === r.steps.length - 1 && isComplete;
+
+                        const liveNodes = boundedStep;
+                        const livePeak = stepData?.frontier?.length || 0;
+                        const liveCost = finished ? (r.metrics.pathCost || '—') : '...';
+                        const liveTime = finished ? r.metrics.executionMs.toFixed(3) : '...';
+                        const livePath = finished ? (r.path.length > 0 ? r.path.join('→') : 'None') : '...';
+
                         const isBest = r.metrics.pathCost > 0 &&
                           r.metrics.pathCost ===
                             Math.min(
@@ -671,26 +979,26 @@ export default function SearchPage() {
                           <tr
                             key={r.algorithm}
                             className={`border-b border-subtle ${
-                              isBest ? 'bg-accent-green/5' : ''
+                              finished && isBest ? 'bg-accent-green/5' : ''
                             }`}
                           >
                             <td className="py-2 px-3 font-medium text-white">
                               {r.algorithm}
                             </td>
                             <td className="py-2 px-3 font-mono text-text-secondary">
-                              {r.metrics.nodesExpanded}
+                              {finished ? r.metrics.nodesExpanded : liveNodes}
                             </td>
                             <td className="py-2 px-3 font-mono text-text-secondary">
-                              {r.metrics.peakFrontier}
+                              {finished ? r.metrics.peakFrontier : livePeak}
                             </td>
-                            <td className={`py-2 px-3 font-mono ${isBest ? 'text-accent-green' : 'text-text-secondary'}`}>
-                              {r.metrics.pathCost || '—'}
+                            <td className={`py-2 px-3 font-mono ${finished && isBest ? 'text-accent-green' : 'text-text-secondary'}`}>
+                              {liveCost}
                             </td>
                             <td className="py-2 px-3 font-mono text-text-secondary">
-                              {r.metrics.executionMs.toFixed(3)}
+                              {liveTime}
                             </td>
                             <td className="py-2 px-3 font-mono text-text-tertiary">
-                              {r.path.length > 0 ? r.path.join('→') : 'None'}
+                              {livePath}
                             </td>
                           </tr>
                         );

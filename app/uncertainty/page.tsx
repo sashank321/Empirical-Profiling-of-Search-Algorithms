@@ -53,8 +53,33 @@ export default function UncertaintyPage() {
   ])
   const [sensorResult, setSensorResult] = useState<{ combined: number; confidence: number; steps: BayesStep[] } | null>(null)
 
-  const runMedical = () => setBayesResult(medicalDiagnosis('Disease X', prevalence, sensitivity, fpr, testResult))
-  const runSensor = () => setSensorResult(sensorFusion(sensors))
+  const runMedical = async () => {
+    try {
+      const resp = await fetch('http://localhost:5000/api/uncertainty/execute', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'medical', prevalence, sensitivity, fpr, testResult })
+      });
+      const data = await resp.json();
+      setBayesResult(data);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const runSensor = async () => {
+    try {
+      const resp = await fetch('http://localhost:5000/api/uncertainty/execute', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'sensor', sensors })
+      });
+      const data = await resp.json();
+      setSensorResult(data);
+    } catch (err) {
+      console.error(err);
+    }
+  };
 
   const updateSensor = (i: number, field: 'reading' | 'reliability', v: number) => {
     const ns = [...sensors]; ns[i] = { ...ns[i], [field]: v }; setSensors(ns)
