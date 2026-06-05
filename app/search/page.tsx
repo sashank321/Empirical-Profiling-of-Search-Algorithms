@@ -24,6 +24,9 @@ import CommandBar from '@/components/ui/CommandBar';
 import ReasoningTimeline from '@/components/shared/ReasoningTimeline';
 import AnalyticsPanel from '@/components/shared/AnalyticsPanel';
 import { bfs, dfs, ucs, gbfs, astar, dijkstra, iddfs, idaStar } from '@/lib/algorithms/search';
+import { fetchWithFallback, type Engine } from '@/lib/config';
+import SearchTree from '@/components/search/SearchTree';
+import XAIPanel from '@/components/search/XAIPanel';
 import type { SearchResult, SearchStep, GraphNode, GraphEdge } from '@/lib/types';
 
 /* ─── Algorithm metadata ─── */
@@ -91,10 +94,10 @@ function getNodeStatus(
   goal: string,
   isComplete: boolean
 ): NodeStatus {
-  if (isComplete && path.includes(nodeId)) return 'path';
-  if (step?.node === nodeId) return 'current';
-  if (nodeId === start) return 'start';
+  if (isComplete && path.length > 0 && path.includes(nodeId)) return 'path';
   if (nodeId === goal) return 'goal';
+  if (nodeId === start) return 'start';
+  if (step?.node === nodeId) return 'current';
   if (step?.frontier.some((f) => f.id === nodeId)) return 'frontier';
   if (step?.visited.includes(nodeId)) return 'visited';
   return 'default';
@@ -212,50 +215,68 @@ export default function SearchPage() {
 
   const algoInfo = ALGORITHMS.find((a) => a.id === selectedAlgo)!;
 
-  /* Run selected algorithm via Python Backend */
+  const [engineType, setEngineType] = useState<Engine | null>(null);
+  const [executeError, setExecuteError] = useState<string | null>(null);
+
+  /* Local fallback for search algorithms */
+  const localSearchFallback = useCallback((algo: string): SearchResult => {
+    const algoMap: Record<string, Function> = { bfs, dfs, ucs, gbfs, astar, dijkstra, iddfs, idaStar };
+    const fn = algoMap[algo];
+    const h = ALGORITHMS.find(a => a.id === algo)?.needsHeuristic ? heuristic : undefined;
+    return h ? fn(adjacency, startNode, goalNode, h) : fn(adjacency, startNode, goalNode);
+  }, [adjacency, startNode, goalNode, heuristic]);
+
+  /* Run selected algorithm via Python Backend with local fallback */
   const execute = useCallback(async () => {
     if (isAnimating) return;
     setIsComplete(false);
     setCurrentStepIndex(-1);
     setCompareResults([]);
+    setExecuteError(null);
 
     try {
-      const response = await fetch('http://localhost:5000/api/search/execute', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          algorithm: selectedAlgo,
-          adjacency: adjacency,
-          start: startNode,
-          goal: goalNode,
-          heuristic: algoInfo.needsHeuristic ? heuristic : {}
-        })
-      });
-      
-      const res = await response.json();
-      if (res.error) {
-        console.error("Backend error:", res.error);
-        return;
-      }
+      const { data: res, engine } = await fetchWithFallback<SearchResult>(
+        '/api/search/execute',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            algorithm: selectedAlgo,
+            adjacency: adjacency,
+            start: startNode,
+            goal: goalNode,
+            heuristic: algoInfo.needsHeuristic ? heuristic : {}
+          })
+        },
+        () => localSearchFallback(selectedAlgo)
+      );
+      setEngineType(engine);
       setResult(res);
 
       if (compareMode) {
-        const fetchPromises = ALGORITHMS.map(async (a) => {
-          const resp = await fetch('http://localhost:5000/api/search/execute', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              algorithm: a.id,
-              adjacency: adjacency,
-              start: startNode,
-              goal: goalNode,
-              heuristic: a.needsHeuristic ? heuristic : {}
-            })
-          });
-          return await resp.json();
-        });
-        const all = await Promise.all(fetchPromises);
-        setCompareResults(all.filter((r) => !r.error));
+        const compareResults = await Promise.all(
+          ALGORITHMS.map(async (a) => {
+            try {
+              const { data } = await fetchWithFallback<SearchResult>(
+                '/api/search/execute',
+                {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    algorithm: a.id,
+                    adjacency: adjacency,
+                    start: startNode,
+                    goal: goalNode,
+                    heuristic: a.needsHeuristic ? heuristic : {}
+                  })
+                },
+                () => localSearchFallback(a.id)
+              );
+              return data;
+            } catch { return null; }
+          })
+        );
+        setCompareResults(compareResults.filter((r): r is SearchResult => r !== null));
       }
 
       /* Animate steps */
@@ -274,9 +295,10 @@ export default function SearchPage() {
       animationRef.current = setTimeout(animate, 300);
       
     } catch (err) {
-      console.error("Failed to fetch from Python backend:", err);
+      setExecuteError('Failed to execute algorithm. Please try again.');
+      console.error("Execution failed:", err);
     }
-  }, [selectedAlgo, startNode, goalNode, speed, isAnimating, compareMode, algoInfo]);
+  }, [selectedAlgo, startNode, goalNode, speed, isAnimating, compareMode, algoInfo, adjacency, heuristic, localSearchFallback]);
 
   /* Reset */
   const reset = useCallback(() => {
@@ -352,9 +374,9 @@ export default function SearchPage() {
 
   return (
     <div className="min-h-screen bg-surface-0 flex flex-col">
-      <CommandBar module="Search Intelligence Lab" subtitle={algoInfo.name} />
+      <CommandBar module="Search Intelligence Lab" subtitle={algoInfo.name} engineIndicator={engineType} />
 
-      <div className="flex flex-1 overflow-hidden flex-col md:flex-row relative">
+      <div className="flex flex-1 overflow-hidden flex-col md:flex-row relative pt-14">
         {/* ── Left Panel: Controls ── */}
         <aside className="w-full md:w-64 min-w-[16rem] bg-surface-1 border-r border-subtle flex flex-col overflow-y-visible flex-shrink-0 z-20">
           {/* Algorithm Selector */}
@@ -521,30 +543,12 @@ export default function SearchPage() {
           </div>
         </aside>
 
-        {/* ── Center: Visualization & Data ── */}
-        <main className="flex-1 flex flex-col overflow-hidden">
-          {/* Top Tab Navigation */}
-          <div className="flex items-center gap-6 px-6 py-3 border-b border-subtle bg-surface-0/50">
-            {(['graph', 'tree', 'xai'] as const).map((tab) => (
-              <button
-                key={tab}
-                onClick={() => setActiveTab(tab)}
-                className={`text-xs font-medium uppercase tracking-wider pb-3 border-b-2 transition-colors ${
-                  activeTab === tab
-                    ? 'border-white text-white'
-                    : 'border-transparent text-text-tertiary hover:text-text-secondary'
-                }`}
-                style={{ marginBottom: '-13px' }}
-              >
-                {tab === 'graph' ? 'Graph View' : tab === 'tree' ? 'Search Tree' : 'XAI Data'}
-              </button>
-            ))}
-          </div>
-
-          <div className="flex-1 relative overflow-hidden">
-            {/* Conditional Views */}
-            {activeTab === 'graph' && (
-              <>
+        {/* ── Center + Right: Main Content ── */}
+        <div className="flex-1 flex flex-col overflow-hidden min-w-0">
+          {/* Top: Graph + XAI side by side */}
+          <div className="flex-1 flex overflow-hidden min-h-0">
+            {/* Graph Visualization */}
+            <div className="flex-1 relative overflow-hidden">
             {/* Status bar */}
             <div className="absolute top-4 left-4 z-10 flex items-center gap-3">
               {isAnimating && (
@@ -826,7 +830,7 @@ export default function SearchPage() {
               })}
 
               {/* Legend */}
-              <g transform="translate(16, 430)">
+              <g transform="translate(16, 570)">
                 {[
                   { color: '#22c55e', label: 'Start' },
                   { color: '#ef4444', label: 'Goal' },
@@ -849,77 +853,44 @@ export default function SearchPage() {
                 ))}
               </g>
             </svg>
-            </>
-          )}
+          </div>
 
-          {activeTab === 'tree' && (
-            <div className="w-full h-full flex flex-col items-center justify-center text-text-tertiary p-8 overflow-auto">
-              {/* Simple Search Tree Placeholder - can be expanded with real tree layout */}
-              <div className="text-center mb-8">
-                <Waypoints className="w-8 h-8 mx-auto mb-3 opacity-50" />
-                <h3 className="text-sm font-medium text-white mb-1">Search Tree Visualization</h3>
-                <p className="text-xs">Tree structure dynamically expands as steps progress.</p>
-              </div>
-              {result && (
-                <div className="flex flex-col gap-4 w-full max-w-2xl">
-                   <div className="bg-surface-1 border border-subtle p-4 rounded-xl">
-                      <span className="text-xs text-text-secondary mb-2 block uppercase tracking-wider">Root</span>
-                      <div className="px-3 py-1.5 bg-surface-2 rounded border border-subtle w-max text-xs">{startNode}</div>
-                   </div>
-                   {currentStep?.frontier.length ? (
-                      <div className="bg-surface-1 border border-subtle p-4 rounded-xl">
-                        <span className="text-xs text-accent-amber mb-2 block uppercase tracking-wider">Current Frontier Branches</span>
-                        <div className="flex flex-wrap gap-2">
-                           {currentStep.frontier.map(f => (
-                              <div key={f.id} className="px-3 py-1.5 bg-surface-3 border border-accent-amber/30 rounded text-xs text-accent-amber">
-                                 {f.id} (cost: {f.f ?? f.g ?? '-'})
-                              </div>
-                           ))}
-                        </div>
-                      </div>
-                   ) : null}
-                </div>
-              )}
-            </div>
-          )}
+            {/* XAI Panel (right side) */}
+            <aside className="w-64 bg-surface-1 border-l border-[rgba(255,255,255,0.06)] flex-shrink-0 overflow-hidden">
+              <XAIPanel
+                step={currentStep}
+                algorithmId={selectedAlgo}
+                algorithmName={algoInfo.name}
+                isComplete={isComplete}
+                path={result?.path ?? []}
+              />
+            </aside>
+          </div>
 
-          {activeTab === 'xai' && (
-            <div className="w-full h-full p-8 overflow-auto">
-              <h3 className="text-lg font-semibold text-white mb-6 tracking-wide">Explainable AI (XAI) Trace</h3>
-              {!result ? (
-                 <p className="text-sm text-text-tertiary">Run an algorithm to see the XAI trace.</p>
-              ) : (
-                 <div className="flex flex-col gap-3">
-                    {result.steps.slice(0, currentStepIndex + 1).map((step, idx) => (
-                       <div key={idx} className={`p-4 rounded-xl border ${idx === currentStepIndex ? 'bg-surface-2 border-accent-blue/50' : 'bg-surface-1 border-subtle'}`}>
-                          <div className="flex items-center justify-between mb-2">
-                             <span className="text-xs font-mono text-text-secondary">Step {idx + 1}</span>
-                             <span className={`text-[10px] uppercase tracking-wider px-2 py-0.5 rounded-full ${step.action === 'goal' ? 'bg-accent-green/20 text-accent-green' : 'bg-surface-3 text-text-secondary'}`}>
-                               {step.action}
-                             </span>
-                          </div>
-                          <div className="text-sm text-white font-medium mb-1">
-                            Current Node: <span className="text-accent-blue">{step.node}</span>
-                          </div>
-                          <div className="text-xs text-text-tertiary mb-3">
-                            Reason: {step.reason}
-                          </div>
-                          <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                             <div className="bg-surface-0 p-2 rounded border border-subtle">
-                                <div className="text-[10px] text-text-tertiary uppercase tracking-wider">Frontier Size</div>
-                                <div className="text-xs font-mono mt-0.5">{step.frontier.length}</div>
-                             </div>
-                             <div className="bg-surface-0 p-2 rounded border border-subtle">
-                                <div className="text-[10px] text-text-tertiary uppercase tracking-wider">Visited</div>
-                                <div className="text-xs font-mono mt-0.5">{step.visited.length}</div>
-                             </div>
-                          </div>
-                       </div>
-                    ))}
-                 </div>
-              )}
+          {/* Bottom: SearchTree + Timeline side by side */}
+          <div className="h-52 flex border-t border-[rgba(255,255,255,0.06)] flex-shrink-0">
+            {/* Search Tree */}
+            <div className="w-1/2 border-r border-[rgba(255,255,255,0.06)] bg-surface-0 overflow-hidden">
+              <SearchTree
+                steps={result?.steps ?? []}
+                currentStepIndex={currentStepIndex}
+                path={result?.path ?? []}
+                isComplete={isComplete}
+                algorithmName={algoInfo.name}
+              />
             </div>
-          )}
+            {/* Reasoning Timeline */}
+            <div className="w-1/2 overflow-hidden">
+
+          {/* ── Compare Mode Panel ── */}
+            <ReasoningTimeline
+              steps={result?.steps ?? []}
+              currentStep={currentStepIndex}
+              onStepClick={(i) => {
+                if (!isAnimating) setCurrentStepIndex(i);
+              }}
+            />
+            </div>
           </div>
 
           {/* ── Compare Mode Panel ── */}
@@ -1009,16 +980,7 @@ export default function SearchPage() {
               </motion.div>
             )}
           </AnimatePresence>
-
-          {/* Reasoning Timeline */}
-          <ReasoningTimeline
-            steps={result?.steps ?? []}
-            currentStep={currentStepIndex}
-            onStepClick={(i) => {
-              if (!isAnimating) setCurrentStepIndex(i);
-            }}
-          />
-        </main>
+        </div>
 
         {/* ── Right Panel: Analytics ── */}
         <AnalyticsPanel
