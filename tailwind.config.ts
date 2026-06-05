@@ -14,16 +14,16 @@ const config: Config = {
       },
       colors: {
         surface: {
-          0: '#000000',
-          1: '#0a0a0a',
+          0: '#050505',
+          1: '#0B0B0B',
           2: '#111111',
-          3: '#1a1a1a',
+          3: '#171717',
           4: '#222222',
         },
         border: {
           DEFAULT: 'rgba(255, 255, 255, 0.06)',
-          hover: 'rgba(255, 255, 255, 0.12)',
-          active: 'rgba(255, 255, 255, 0.2)',
+          hover: 'rgba(255, 255, 255, 0.08)',
+          active: 'rgba(255, 255, 255, 0.14)',
         },
         text: {
           primary: '#ffffff',
