@@ -1,9 +1,10 @@
 'use client'
 
 import React, { useState, useCallback } from 'react'
-import Link from 'next/link'
-import { ArrowLeft, RotateCcw } from 'lucide-react'
-import { runMinimax, runAlphaBeta, checkWinner, getAvailableMoves } from '@/lib/algorithms/minimax'
+import { RotateCcw } from 'lucide-react'
+import CommandBar from '@/components/ui/CommandBar'
+import { checkWinner, getAvailableMoves, runMinimax, runAlphaBeta } from '@/lib/algorithms/minimax'
+import { fetchWithFallback, type Engine } from '@/lib/config'
 import type { MinimaxResult } from '@/lib/types'
 
 type Cell = 'X' | 'O' | null
@@ -16,41 +17,51 @@ export default function DecisionsPage() {
   const [gameStatus, setGameStatus] = useState<string>('Your turn (O)')
   const [history, setHistory] = useState<{ board: Cell[]; move: string }[]>([])
   const [isThinking, setIsThinking] = useState(false)
+  const [engine, setEngine] = useState<Engine | null>(null)
+  const [error, setError] = useState<string | null>(null)
 
   const reset = () => {
     setBoard(Array(9).fill(null))
     setResult(null)
     setGameStatus('Your turn (O)')
     setHistory([])
+    setError(null)
   }
+
+  const localMinimaxFallback = useCallback((b: Cell[], useAlphaBeta: boolean): MinimaxResult => {
+    // Local TS fallback using lib/algorithms/minimax
+    return useAlphaBeta ? runAlphaBeta(b, false) : runMinimax(b, false)
+  }, [])
 
   const aiMove = useCallback(async (b: Cell[]) => {
     try {
-      const resp = await fetch('http://localhost:5000/api/decision/execute', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          problem: 'tic_tac_toe',
-          board: b,
-          useAlphaBeta: algo === 'alphabeta'
-        })
-      });
-      const r = await resp.json();
-      if (r.error) {
-        console.error(r.error);
-        return b;
-      }
-      setResult(r);
-      if (!r.bestMove || r.bestMove === "Move→-1") return b;
-      const idx = parseInt(r.bestMove.split('→')[1])
+      setError(null)
+      const { data, engine: eng } = await fetchWithFallback<MinimaxResult>(
+        '/api/decision/execute',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            problem: 'tic_tac_toe',
+            board: b,
+            useAlphaBeta: algo === 'alphabeta'
+          })
+        },
+        () => localMinimaxFallback(b, algo === 'alphabeta')
+      )
+      setEngine(eng)
+      setResult(data)
+      if (!data.bestMove || data.bestMove === "Move→-1") return b
+      const idx = parseInt(data.bestMove.split('→')[1])
       const nb = [...b]; nb[idx] = 'X'
       setHistory(h => [...h, { board: nb, move: `AI plays X at ${idx}` }])
       return nb
     } catch (err) {
-      console.error(err);
-      return b;
+      setError('Failed to compute AI move')
+      console.error(err)
+      return b
     }
-  }, [algo])
+  }, [algo, localMinimaxFallback])
 
   const handleClick = async (i: number) => {
     if (board[i] || checkWinner(board) || isThinking) return
@@ -74,28 +85,18 @@ export default function DecisionsPage() {
     setIsThinking(false)
   }
 
-  const posLabel = (i: number) => ['TL','TC','TR','ML','MC','MR','BL','BC','BR'][i]
-
   return (
     <div className="min-h-screen bg-surface-0 text-white">
-      {/* Command Bar */}
-      <header className="sticky top-0 z-50 h-14 bg-surface-0/80 backdrop-blur-xl border-b border-[rgba(255,255,255,0.06)] flex items-center px-6">
-        <div className="flex items-center gap-2">
-          <span className="text-sm font-semibold tracking-[0.2em]">CORTEX</span>
-          <span className="text-sm text-text-secondary">AI</span>
-        </div>
-        <span className="absolute left-1/2 -translate-x-1/2 text-xs text-text-tertiary tracking-wider uppercase">Decision Intelligence Lab</span>
-        <Link href="/" className="ml-auto flex items-center gap-1.5 text-text-secondary hover:text-white transition-colors text-xs"><ArrowLeft className="w-3.5 h-3.5" />Home</Link>
-      </header>
+      <CommandBar module="Decision Intelligence Lab" engineIndicator={engine} />
 
-      <div className="flex h-[calc(100vh-3.5rem)]">
+      <div className="flex pt-14 h-screen">
         {/* Left Panel */}
-        <aside className="w-64 bg-surface-1 border-r border-[rgba(255,255,255,0.06)] p-5 flex flex-col gap-6 overflow-y-auto">
+        <aside className="w-64 bg-surface-1 border-r border-[rgba(255,255,255,0.06)] p-5 flex flex-col gap-6 overflow-y-auto flex-shrink-0">
           <div>
             <p className="text-[10px] text-text-tertiary uppercase tracking-wider mb-3">Algorithm</p>
             {(['minimax','alphabeta'] as Algo[]).map(a => (
               <button key={a} onClick={() => { setAlgo(a); reset() }}
-                className={`w-full text-left px-3 py-2.5 rounded-xl text-sm mb-1.5 transition-all duration-200 ${algo === a ? 'bg-surface-3 border border-[rgba(255,255,255,0.2)] text-white' : 'bg-surface-1 border border-transparent text-text-secondary hover:bg-surface-2'}`}>
+                className={`w-full text-left px-3 py-2.5 rounded-xl text-sm mb-1.5 transition-all duration-200 ${algo === a ? 'bg-surface-3 border border-[rgba(255,255,255,0.14)] text-white' : 'bg-surface-1 border border-transparent text-text-secondary hover:bg-surface-2'}`}>
                 {a === 'minimax' ? 'Minimax' : 'Alpha-Beta Pruning'}
               </button>
             ))}
@@ -105,9 +106,15 @@ export default function DecisionsPage() {
             <RotateCcw className="w-3.5 h-3.5" /> Reset Game
           </button>
 
+          {error && (
+            <div className="bg-accent-red/10 border border-accent-red/20 rounded-xl p-3 text-xs text-accent-red">
+              {error}
+            </div>
+          )}
+
           <div className="mt-auto border-t border-[rgba(255,255,255,0.06)] pt-4 space-y-3">
             <p className="text-[10px] text-text-tertiary uppercase tracking-wider">Game Stats</p>
-            <div className="flex justify-between text-xs"><span className="text-text-secondary">Status</span><span className="text-white font-mono">{gameStatus}</span></div>
+            <div className="flex justify-between text-xs"><span className="text-text-secondary">Status</span><span className="text-white font-mono text-[11px] truncate ml-2">{gameStatus}</span></div>
             {result && <>
               <div className="flex justify-between text-xs"><span className="text-text-secondary">Nodes Visited</span><span className="text-white font-mono">{result.nodesVisited}</span></div>
               <div className="flex justify-between text-xs"><span className="text-text-secondary">Nodes Pruned</span><span className="text-white font-mono">{result.nodesPruned}</span></div>
@@ -118,7 +125,7 @@ export default function DecisionsPage() {
         </aside>
 
         {/* Center */}
-        <main className="flex-1 flex flex-col">
+        <main className="flex-1 flex flex-col min-w-0">
           <div className="flex-1 flex items-center justify-center gap-16 p-8">
             {/* Board */}
             <div className="flex flex-col items-center gap-4">
@@ -136,7 +143,7 @@ export default function DecisionsPage() {
               <p className="text-xs text-text-muted">You = O · AI = X ({algo === 'alphabeta' ? 'α-β' : 'Minimax'})</p>
             </div>
 
-            {/* Decision Tree (simplified last 5 steps) */}
+            {/* Decision Trace */}
             <div className="flex flex-col items-center gap-4 min-w-[300px]">
               <p className="text-xs text-text-tertiary uppercase tracking-wider">Decision Trace</p>
               <div className="bg-surface-1 border border-[rgba(255,255,255,0.06)] rounded-2xl p-4 w-full max-h-[400px] overflow-y-auto space-y-2">
@@ -156,7 +163,7 @@ export default function DecisionsPage() {
           </div>
 
           {/* Bottom: Context */}
-          <div className="h-32 border-t border-[rgba(255,255,255,0.06)] bg-surface-1 p-5 flex items-center gap-6">
+          <div className="h-32 border-t border-[rgba(255,255,255,0.06)] bg-surface-1 p-5 flex items-center gap-6 flex-shrink-0">
             <div className="flex-1">
               <p className="text-[10px] text-text-tertiary uppercase tracking-wider mb-2">Contextual Analysis</p>
               <p className="text-sm text-text-secondary leading-relaxed">
@@ -165,7 +172,7 @@ export default function DecisionsPage() {
                   : 'Alpha-Beta pruning eliminates branches that cannot influence the final decision, dramatically reducing the search space while guaranteeing the same optimal result as full Minimax.'}
               </p>
             </div>
-            <div className="text-right">
+            <div className="text-right flex-shrink-0">
               <p className="text-[10px] text-text-tertiary uppercase tracking-wider mb-1">Real-World Use</p>
               <p className="text-sm text-white font-medium">Chess AI, Game Theory, Adversarial Planning</p>
             </div>

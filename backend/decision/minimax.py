@@ -73,9 +73,11 @@ def solve_minimax(tree, root, max_depth, use_alpha_beta=False):
 
     return {
         "algorithm": "Alpha-Beta" if use_alpha_beta else "Minimax",
-        "bestValue": best_val,
+        "value": best_val,
         "steps": steps,
-        "metrics": metrics
+        "nodesVisited": metrics["nodesExplored"],
+        "nodesPruned": metrics["prunedBranches"],
+        "executionMs": metrics["executionMs"]
     }
 
 def check_winner(board):
@@ -186,9 +188,11 @@ def solve_tic_tac_toe(board, use_alpha_beta=False):
 
     return {
         "algorithm": "Alpha-Beta" if use_alpha_beta else "Minimax",
-        "bestValue": best_val,
+        "value": best_val,
         "bestMove": f"Move→{best_move}",
         "steps": steps,
-        "metrics": metrics
+        "nodesVisited": metrics["nodesExplored"],
+        "nodesPruned": metrics["prunedBranches"],
+        "executionMs": metrics["executionMs"]
     }
 
