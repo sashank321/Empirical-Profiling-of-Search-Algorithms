@@ -3,31 +3,37 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  Play, RotateCcw, Grid3X3, Palette, CalendarClock,
+  Play, RotateCcw, Grid3X3, Palette, CalendarClock, Keyboard,
   ChevronRight, Activity, Clock, Hash, AlertTriangle,
-  Zap, CheckCircle2, XCircle, ArrowLeft, SkipForward, Pause,
+  Zap, CheckCircle2, XCircle, SkipForward, Pause,
 } from 'lucide-react';
+import CommandBar from '@/components/ui/CommandBar';
+
+import { fetchWithFallback, type Engine } from '@/lib/config';
 import { CSPStep, CSPResult } from '@/lib/types';
 import {
   solveCSP,
   createNQueens,
   createGraphColoring,
   createTimetable,
-  decodeTimetableSlot,
   DEFAULT_GRAPH_NODES,
   DEFAULT_GRAPH_EDGES,
-  TIMETABLE_ROOMS,
-  TIMETABLE_TIMESLOTS,
-  TIMETABLE_CONFLICTS,
   CSPSetup,
   CSPOptions,
+  createCryptarithmetic,
 } from '@/lib/algorithms/csp';
+
+// Import extracted visualization components
+import NQueensBoard from '@/components/constraints/NQueensBoard';
+import GraphColoringViz from '@/components/constraints/GraphColoringViz';
+import TimetableGrid from '@/components/constraints/TimetableGrid';
+import CryptarithmeticViz from '@/components/constraints/CryptarithmeticViz';
 
 /* ════════════════════════════════════════════
    Types
    ════════════════════════════════════════════ */
 
-type ProblemType = 'nqueens' | 'coloring' | 'timetable';
+type ProblemType = 'nqueens' | 'coloring' | 'timetable' | 'cryptarithmetic';
 
 interface ToggleState {
   forwardChecking: boolean;
@@ -40,14 +46,12 @@ interface ToggleState {
    Constants
    ════════════════════════════════════════════ */
 
-const PROBLEM_OPTIONS: { id: ProblemType; label: string; icon: React.ReactNode }[] = [
-  { id: 'nqueens', label: 'N-Queens', icon: <Grid3X3 size={16} /> },
-  { id: 'coloring', label: 'Graph Coloring', icon: <Palette size={16} /> },
-  { id: 'timetable', label: 'Timetabling', icon: <CalendarClock size={16} /> },
+const PROBLEM_OPTIONS: { id: ProblemType; label: string; icon: React.ReactNode; industryLabel: string }[] = [
+  { id: 'nqueens', label: 'N-Queens', industryLabel: 'Drone Sector Mapping', icon: <Grid3X3 size={16} /> },
+  { id: 'coloring', label: 'Graph Coloring', industryLabel: 'Frequency Allocation', icon: <Palette size={16} /> },
+  { id: 'timetable', label: 'Timetabling', industryLabel: 'Gate Scheduling', icon: <CalendarClock size={16} /> },
+  { id: 'cryptarithmetic', label: 'Cryptarithmetic', industryLabel: 'Resource Recon', icon: <Keyboard size={16} /> },
 ];
-
-const ACCENT_COLORS = ['#3b82f6', '#22c55e', '#f59e0b', '#ef4444', '#a855f7'];
-const ACCENT_BG_CLASSES = ['bg-accent-blue', 'bg-accent-green', 'bg-accent-amber', 'bg-accent-red', 'bg-accent-purple'];
 
 /* ════════════════════════════════════════════
    Shared Sub-components
@@ -63,15 +67,11 @@ function Toggle({ label, enabled, onChange, locked }: { label: string; enabled: 
     >
       <span className="text-sm text-text-secondary">{label}</span>
       <div
-        className={`w-9 h-5 rounded-full transition-all duration-200 relative ${
-          enabled ? 'bg-accent-blue' : 'bg-surface-2'
+        className={`w-9 h-5 rounded-full transition-all duration-200 flex items-center px-0.5 ${
+          enabled ? 'bg-accent-blue justify-end' : 'bg-surface-2 justify-start'
         }`}
       >
-        <div
-          className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all duration-200 ${
-            enabled ? 'left-[18px]' : 'left-0.5'
-          }`}
-        />
+        <div className={`w-4 h-4 rounded-full bg-white transition-all duration-200 shadow-sm`} />
       </div>
     </button>
   );
@@ -79,214 +79,12 @@ function Toggle({ label, enabled, onChange, locked }: { label: string; enabled: 
 
 function MetricCard({ label, value, icon }: { label: string; value: string | number; icon: React.ReactNode }) {
   return (
-    <div className="bg-surface-1 border-subtle rounded-xl p-3 flex flex-col gap-1">
+    <div className="bg-surface-1 border border-subtle rounded-xl p-3 flex flex-col gap-1 shadow-sm">
       <div className="flex items-center gap-1.5 text-text-tertiary">
         {icon}
         <span className="text-[11px] uppercase tracking-wider font-medium">{label}</span>
       </div>
       <span className="text-lg font-mono font-semibold text-white">{value}</span>
-    </div>
-  );
-}
-
-/* ════════════════════════════════════════════
-   N-Queens Visualization
-   ════════════════════════════════════════════ */
-
-function NQueensBoard({ n, assignments, conflicts }: { n: number; assignments: Record<string, number | string>; conflicts: Set<string> }) {
-  const cellSize = Math.max(28, Math.min(48, 400 / n));
-
-  return (
-    <div className="flex items-center justify-center w-full h-full">
-      <div
-        className="inline-grid border-subtle rounded-xl overflow-hidden"
-        style={{ gridTemplateColumns: `repeat(${n}, ${cellSize}px)`, gridTemplateRows: `repeat(${n}, ${cellSize}px)` }}
-      >
-        {Array.from({ length: n * n }, (_, idx) => {
-          const row = Math.floor(idx / n);
-          const col = idx % n;
-          const varName = `Q${col}`;
-          const isQueenHere = varName in assignments && Number(assignments[varName]) === row;
-          const isConflict = isQueenHere && conflicts.has(varName);
-          const isDark = (row + col) % 2 === 1;
-
-          return (
-            <motion.div
-              key={idx}
-              className={`flex items-center justify-center transition-all duration-200 ${
-                isDark ? 'bg-surface-2' : 'bg-surface-1'
-              } ${isConflict ? 'border-2 border-accent-red' : ''}`}
-              style={{ width: cellSize, height: cellSize }}
-            >
-              {isQueenHere && (
-                <motion.span
-                  initial={{ scale: 0, opacity: 0 }}
-                  animate={{ scale: 1, opacity: 1 }}
-                  exit={{ scale: 0, opacity: 0 }}
-                  transition={{ type: 'spring', stiffness: 400, damping: 25 }}
-                  className={`text-2xl select-none ${isConflict ? 'text-accent-red' : 'text-accent-blue'}`}
-                  style={{ fontSize: Math.max(16, cellSize * 0.55) }}
-                >
-                  ♛
-                </motion.span>
-              )}
-            </motion.div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-/* ════════════════════════════════════════════
-   Graph Coloring Visualization
-   ════════════════════════════════════════════ */
-
-const GRAPH_NODE_POSITIONS: Record<string, { x: number; y: number }> = {
-  WA: { x: 80, y: 160 },
-  NT: { x: 200, y: 60 },
-  SA: { x: 220, y: 200 },
-  Q: { x: 350, y: 80 },
-  NSW: { x: 370, y: 200 },
-  V: { x: 310, y: 300 },
-  T: { x: 340, y: 380 },
-};
-
-function GraphColoringViz({ assignments, edges }: { assignments: Record<string, number | string>; edges: [string, string][] }) {
-  return (
-    <div className="flex items-center justify-center w-full h-full">
-      <svg viewBox="0 0 460 440" className="w-full max-w-[460px] max-h-[440px]">
-        {edges.map(([a, b], i) => {
-          const pa = GRAPH_NODE_POSITIONS[a];
-          const pb = GRAPH_NODE_POSITIONS[b];
-          if (!pa || !pb) return null;
-          return (
-            <line
-              key={i}
-              x1={pa.x} y1={pa.y} x2={pb.x} y2={pb.y}
-              stroke="rgba(255,255,255,0.08)" strokeWidth={1.5}
-            />
-          );
-        })}
-        {DEFAULT_GRAPH_NODES.map(node => {
-          const pos = GRAPH_NODE_POSITIONS[node];
-          if (!pos) return null;
-          const colorIdx = node in assignments ? Number(assignments[node]) : -1;
-          const fill = colorIdx >= 0 ? ACCENT_COLORS[colorIdx % ACCENT_COLORS.length] : '#1a1a1a';
-          const textColor = colorIdx >= 0 ? '#fff' : '#a1a1aa';
-
-          return (
-            <g key={node}>
-              <motion.circle
-                cx={pos.x} cy={pos.y} r={24}
-                fill={fill}
-                stroke="rgba(255,255,255,0.1)" strokeWidth={1}
-                initial={{ scale: 0 }}
-                animate={{ scale: 1 }}
-                transition={{ type: 'spring', stiffness: 300, damping: 20 }}
-              />
-              <text x={pos.x} y={pos.y + 5} textAnchor="middle" fill={textColor} fontSize={12} fontFamily="Inter, sans-serif" fontWeight={500}>
-                {node}
-              </text>
-            </g>
-          );
-        })}
-      </svg>
-    </div>
-  );
-}
-
-/* ════════════════════════════════════════════
-   Timetable Visualization
-   ════════════════════════════════════════════ */
-
-function TimetableGrid({ assignments, courses }: { assignments: Record<string, number | string>; courses: string[] }) {
-  const conflictCells = new Set<string>();
-
-  for (let i = 0; i < courses.length; i++) {
-    for (let j = i + 1; j < courses.length; j++) {
-      const c1 = courses[i];
-      const c2 = courses[j];
-      if (!(c1 in assignments) || !(c2 in assignments)) continue;
-      const s1 = Number(assignments[c1]);
-      const s2 = Number(assignments[c2]);
-      if (s1 === s2) {
-        conflictCells.add(`${c1}-${s1}`);
-        conflictCells.add(`${c2}-${s2}`);
-      }
-      const t1 = s1 % TIMETABLE_TIMESLOTS.length;
-      const t2 = s2 % TIMETABLE_TIMESLOTS.length;
-      for (const [ca, cb] of TIMETABLE_CONFLICTS) {
-        if ((c1 === ca && c2 === cb) || (c1 === cb && c2 === ca)) {
-          if (t1 === t2) {
-            conflictCells.add(`${c1}-${s1}`);
-            conflictCells.add(`${c2}-${s2}`);
-          }
-        }
-      }
-    }
-  }
-
-  return (
-    <div className="flex items-center justify-center w-full h-full overflow-auto">
-      <div className="inline-block">
-        <table className="border-collapse">
-          <thead>
-            <tr>
-              <th className="p-2 text-[11px] text-text-tertiary uppercase tracking-wider border-subtle bg-surface-1 rounded-tl-xl" />
-              {TIMETABLE_TIMESLOTS.map(ts => (
-                <th key={ts} className="p-2 text-[11px] text-text-tertiary uppercase tracking-wider border-subtle bg-surface-1 font-medium">
-                  {ts}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {courses.map(course => (
-              <tr key={course}>
-                <td className="p-2 text-xs font-mono text-text-secondary border-subtle bg-surface-1 font-medium whitespace-nowrap">
-                  {course}
-                </td>
-                {TIMETABLE_TIMESLOTS.map((_, tIdx) => {
-                  const cellContent: { room: string; slot: number }[] = [];
-                  if (course in assignments) {
-                    const slot = Number(assignments[course]);
-                    const { room, timeslot } = decodeTimetableSlot(slot);
-                    if (TIMETABLE_TIMESLOTS[tIdx] === timeslot) {
-                      cellContent.push({ room, slot });
-                    }
-                  }
-                  const hasContent = cellContent.length > 0;
-                  const hasConflict = hasContent && conflictCells.has(`${course}-${cellContent[0].slot}`);
-
-                  return (
-                    <td
-                      key={tIdx}
-                      className={`p-2 text-center text-xs font-mono border-subtle transition-all duration-200 min-w-[64px] ${
-                        hasConflict
-                          ? 'bg-accent-red/10 border-accent-red/30'
-                          : hasContent
-                          ? 'bg-accent-blue/10'
-                          : 'bg-surface-0'
-                      }`}
-                    >
-                      {hasContent && (
-                        <motion.span
-                          initial={{ opacity: 0, scale: 0.8 }}
-                          animate={{ opacity: 1, scale: 1 }}
-                          className={hasConflict ? 'text-accent-red' : 'text-accent-blue'}
-                        >
-                          {cellContent[0].room}
-                        </motion.span>
-                      )}
-                    </td>
-                  );
-                })}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
     </div>
   );
 }
@@ -301,7 +99,7 @@ function CSPStatePanel({ variables, domains, assignments }: {
   assignments: Record<string, number | string>;
 }) {
   return (
-    <div className="bg-surface-1 border-subtle rounded-xl p-4 flex flex-col gap-2">
+    <div className="bg-surface-1 border border-subtle rounded-xl p-4 flex flex-col gap-2 shadow-sm">
       <h3 className="text-xs uppercase tracking-wider text-text-tertiary font-medium mb-1">CSP State — Domains</h3>
       <div className="flex flex-col gap-1.5 max-h-[260px] overflow-y-auto">
         {variables.map(v => {
@@ -317,12 +115,12 @@ function CSPStatePanel({ variables, domains, assignments }: {
               ) : (
                 <div className="flex flex-wrap gap-0.5">
                   {domainValues.map((d, i) => (
-                    <span key={i} className="text-[10px] font-mono px-1.5 py-0.5 bg-surface-3 rounded text-text-tertiary">
+                    <span key={i} className="text-[10px] font-mono px-1.5 py-0.5 bg-surface-3 rounded text-text-tertiary border border-surface-3">
                       {d}
                     </span>
                   ))}
                   {domainValues.length === 0 && (
-                    <span className="text-[10px] font-mono text-accent-red">∅</span>
+                    <span className="text-[10px] font-mono text-accent-red font-bold">∅ DWO</span>
                   )}
                 </div>
               )}
@@ -368,14 +166,14 @@ function ReasoningTimeline({ steps, currentStep }: { steps: CSPStep[]; currentSt
   };
 
   return (
-    <div className="bg-surface-1 border-subtle rounded-xl flex flex-col h-full">
-      <div className="px-4 py-3 border-b border-[rgba(255,255,255,0.06)] flex items-center justify-between">
+    <div className="bg-surface-1 border-t border-subtle flex flex-col h-[240px]">
+      <div className="px-4 py-3 border-b border-[rgba(255,255,255,0.06)] flex items-center justify-between shadow-sm">
         <h3 className="text-xs uppercase tracking-wider text-text-tertiary font-medium">Reasoning Timeline</h3>
         <span className="text-[10px] font-mono text-text-tertiary">
           {visibleSteps.length}/{steps.length} steps
         </span>
       </div>
-      <div ref={containerRef} className="flex-1 overflow-y-auto p-3 flex flex-col gap-1 max-h-[200px]">
+      <div ref={containerRef} className="flex-1 overflow-y-auto p-3 flex flex-col gap-1">
         {visibleSteps.length === 0 ? (
           <div className="flex items-center justify-center h-full text-text-tertiary text-xs">
             Run the solver to see reasoning steps
@@ -387,11 +185,11 @@ function ReasoningTimeline({ steps, currentStep }: { steps: CSPStep[]; currentSt
               initial={{ opacity: 0, x: -8 }}
               animate={{ opacity: 1, x: 0 }}
               transition={{ duration: 0.15 }}
-              className={`flex items-start gap-2 px-2 py-1.5 rounded-lg text-xs transition-all duration-200 ${
-                i === currentStep ? 'bg-surface-3' : ''
+              className={`flex items-start gap-2 px-3 py-2 rounded-xl text-xs transition-all duration-200 ${
+                i === currentStep ? 'bg-surface-3 shadow-inner' : 'hover:bg-surface-2'
               }`}
             >
-              {actionIcon(step.action)}
+              <div className="mt-0.5">{actionIcon(step.action)}</div>
               <div className="flex flex-col gap-0.5 min-w-0">
                 <span className={`font-mono font-medium ${actionColor(step.action)}`}>
                   {step.variable}={String(step.value)} — {step.action}
@@ -414,14 +212,20 @@ function ReasoningTimeline({ steps, currentStep }: { steps: CSPStep[]; currentSt
 export default function ConstraintIntelligenceLabPage() {
   /* ── State ── */
   const [problem, setProblem] = useState<ProblemType>('nqueens');
+  const [appMode, setAppMode] = useState<'academic' | 'industry'>('academic');
+  
   const [nQueensSize, setNQueensSize] = useState(8);
   const [nColors, setNColors] = useState(3);
+  
+  const [cryptoWords, setCryptoWords] = useState({ word1: 'SEND', word2: 'MORE', resultWord: 'MONEY' });
+  
   const [toggles, setToggles] = useState<ToggleState>({
     forwardChecking: false,
     mrv: false,
     lcv: false,
     ac3: false,
   });
+  
   const [speed, setSpeed] = useState(50);
   const [result, setResult] = useState<CSPResult | null>(null);
   const [currentStep, setCurrentStep] = useState(-1);
@@ -525,25 +329,42 @@ export default function ConstraintIntelligenceLabPage() {
     if (problem === 'timetable') problemKey = 'timetabling';
 
     try {
-      const response = await fetch('http://localhost:5000/api/csp/execute', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          problem: problemKey,
-          n: nQueensSize,
-          nodes: DEFAULT_GRAPH_NODES,
-          edges: DEFAULT_GRAPH_EDGES,
-          nColors: nColors,
-          options: options
-        })
-      });
-
-      const cspResult = await response.json();
-      if (cspResult.error) {
-         console.error("Backend error:", cspResult.error);
-         setIsSolving(false);
-         return;
+      const localFallback = (): CSPResult => {
+        let setup: CSPSetup;
+        if (problem === 'nqueens') setup = createNQueens(nQueensSize);
+        else if (problem === 'coloring') setup = createGraphColoring(DEFAULT_GRAPH_NODES, DEFAULT_GRAPH_EDGES, nColors);
+        else if (problem === 'cryptarithmetic') setup = createCryptarithmetic(cryptoWords.word1, cryptoWords.word2, cryptoWords.resultWord);
+        else setup = createTimetable();
+        return solveCSP(setup.variables, setup.domains, setup.isConsistent, options);
+      };
+      
+      const payload: any = {
+        problem: problemKey,
+        options: options
+      };
+      
+      if (problem === 'nqueens') payload.n = nQueensSize;
+      if (problem === 'coloring') {
+        payload.nodes = DEFAULT_GRAPH_NODES;
+        payload.edges = DEFAULT_GRAPH_EDGES;
+        payload.nColors = nColors;
       }
+      if (problem === 'cryptarithmetic') {
+        payload.word1 = cryptoWords.word1;
+        payload.word2 = cryptoWords.word2;
+        payload.result_word = cryptoWords.resultWord;
+      }
+
+      const { data: cspResult, engine } = await fetchWithFallback<CSPResult>(
+        '/api/csp/execute',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        },
+        localFallback
+      );
+      setEngineType(engine);
 
       setResult(cspResult);
       setCurrentStep(-1);
@@ -576,10 +397,10 @@ export default function ConstraintIntelligenceLabPage() {
         animFrameRef.current = requestAnimationFrame(tick);
       }, 100);
     } catch (err) {
-      console.error("Failed to fetch from Python backend:", err);
+      console.error("Failed to execute CSP solver:", err);
       setIsSolving(false);
     }
-  }, [problem, nQueensSize, nColors, toggles, stopPlayback, speed]);
+  }, [problem, nQueensSize, nColors, cryptoWords, toggles, stopPlayback, speed]);
 
   /* ── Reset ── */
   const handleReset = useCallback(() => {
@@ -596,47 +417,44 @@ export default function ConstraintIntelligenceLabPage() {
     };
   }, []);
 
+  const [engineType, setEngineType] = useState<Engine | null>(null);
+
   /* ── Render ── */
   return (
-    <div className="min-h-screen bg-surface-0 bg-grid flex flex-col">
+    <div className="h-screen bg-surface-0 flex flex-col overflow-hidden">
 
-      {/* ── Command Bar ── */}
-      <header className="h-14 border-b border-[rgba(255,255,255,0.06)] bg-surface-0/80 backdrop-blur-xl flex items-center px-6 gap-4 flex-shrink-0 z-50">
-        <a href="/" className="flex items-center gap-2 text-text-tertiary hover:text-white transition-all duration-200">
-          <ArrowLeft size={16} />
-        </a>
-        <div className="w-px h-5 bg-[rgba(255,255,255,0.06)]" />
-        <div className="flex items-center gap-2">
-          <div className="w-2 h-2 rounded-full bg-accent-purple" />
-          <span className="text-sm font-medium text-white">Constraint Intelligence Lab</span>
-        </div>
-        <div className="flex-1" />
-        <span className="text-[11px] text-text-tertiary font-mono">CORTEX AI</span>
-      </header>
+      <CommandBar 
+        module="Constraint Intelligence Lab" 
+        engineIndicator={engineType}
+        mode={appMode}
+        onModeChange={setAppMode}
+      />
 
       {/* ── Main Layout ── */}
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex-1 flex overflow-hidden pt-14">
 
         {/* ── Left Panel ── */}
-        <aside className="w-64 flex-shrink-0 border-r border-[rgba(255,255,255,0.06)] bg-surface-0 flex flex-col overflow-y-auto">
-          <div className="p-4 flex flex-col gap-5">
+        <aside className="w-[300px] flex-shrink-0 border-r border-subtle bg-surface-0/80 backdrop-blur-xl flex flex-col overflow-y-auto shadow-[4px_0_24px_rgba(0,0,0,0.2)] z-10">
+          <div className="p-5 flex flex-col gap-6">
 
             {/* Problem Selector */}
-            <div className="flex flex-col gap-2">
-              <span className="text-[11px] uppercase tracking-wider text-text-tertiary font-medium">Problem</span>
-              <div className="flex flex-col gap-1">
+            <div className="flex flex-col gap-2.5">
+              <span className="text-[11px] uppercase tracking-wider text-text-tertiary font-medium">Simulation Subject</span>
+              <div className="flex flex-col gap-1.5">
                 {PROBLEM_OPTIONS.map(opt => (
                   <button
                     key={opt.id}
                     onClick={() => { setProblem(opt.id); handleReset(); }}
-                    className={`flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm transition-all duration-200 ${
+                    className={`flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm transition-all duration-300 ${
                       problem === opt.id
-                        ? 'bg-surface-3 text-white'
-                        : 'text-text-secondary hover:bg-surface-2 hover:text-white'
+                        ? 'bg-surface-3 text-white shadow-inner border border-[rgba(255,255,255,0.05)]'
+                        : 'text-text-secondary hover:bg-surface-2 hover:text-white border border-transparent'
                     }`}
                   >
-                    {opt.icon}
-                    {opt.label}
+                    <div className={problem === opt.id ? 'text-accent-blue' : 'text-text-tertiary'}>
+                      {opt.icon}
+                    </div>
+                    {appMode === 'industry' ? opt.industryLabel : opt.label}
                     {problem === opt.id && <ChevronRight size={14} className="ml-auto text-text-tertiary" />}
                   </button>
                 ))}
@@ -644,88 +462,118 @@ export default function ConstraintIntelligenceLabPage() {
             </div>
 
             {/* Problem-specific Config */}
-            <AnimatePresence mode="wait">
-              {problem === 'nqueens' && (
-                <motion.div
-                  key="nqueens-config"
-                  initial={{ opacity: 0, y: 4 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -4 }}
-                  className="flex flex-col gap-2"
-                >
-                  <span className="text-[11px] uppercase tracking-wider text-text-tertiary font-medium">Board Size</span>
-                  <div className="flex items-center gap-3">
-                    <input
-                      type="range" min={4} max={12} value={nQueensSize}
-                      onChange={e => setNQueensSize(Number(e.target.value))}
-                      className="flex-1 accent-accent-blue h-1 bg-surface-3 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3.5 [&::-webkit-slider-thumb]:h-3.5 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-accent-blue"
-                    />
-                    <span className="text-sm font-mono text-white w-6 text-right">{nQueensSize}</span>
-                  </div>
-                </motion.div>
-              )}
-              {problem === 'coloring' && (
-                <motion.div
-                  key="coloring-config"
-                  initial={{ opacity: 0, y: 4 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -4 }}
-                  className="flex flex-col gap-2"
-                >
-                  <span className="text-[11px] uppercase tracking-wider text-text-tertiary font-medium">Colors</span>
-                  <div className="flex gap-1.5">
-                    {[3, 4, 5].map(c => (
-                      <button
-                        key={c}
-                        onClick={() => setNColors(c)}
-                        className={`flex-1 py-1.5 rounded-xl text-sm font-mono transition-all duration-200 ${
-                          nColors === c ? 'bg-accent-blue text-white' : 'bg-surface-2 text-text-secondary hover:bg-surface-3'
-                        }`}
-                      >
-                        {c}
-                      </button>
-                    ))}
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
+            <div className="min-h-[60px]">
+              <AnimatePresence mode="wait">
+                {problem === 'nqueens' && (
+                  <motion.div
+                    key="nqueens-config"
+                    initial={{ opacity: 0, y: 4 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -4 }}
+                    className="flex flex-col gap-2.5"
+                  >
+                    <span className="text-[11px] uppercase tracking-wider text-text-tertiary font-medium">Grid Size</span>
+                    <div className="flex items-center gap-3 bg-surface-1 p-3 rounded-xl border border-subtle">
+                      <input
+                        type="range" min={4} max={12} value={nQueensSize}
+                        onChange={e => setNQueensSize(Number(e.target.value))}
+                        className="flex-1 accent-accent-blue h-1.5 bg-surface-3 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-accent-blue [&::-webkit-slider-thumb]:shadow-[0_0_10px_rgba(59,130,246,0.5)]"
+                      />
+                      <span className="text-sm font-mono text-white w-6 text-right bg-surface-2 px-1 rounded">{nQueensSize}</span>
+                    </div>
+                  </motion.div>
+                )}
+                {problem === 'coloring' && (
+                  <motion.div
+                    key="coloring-config"
+                    initial={{ opacity: 0, y: 4 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -4 }}
+                    className="flex flex-col gap-2.5"
+                  >
+                    <span className="text-[11px] uppercase tracking-wider text-text-tertiary font-medium">Allocations</span>
+                    <div className="flex gap-2 p-1.5 bg-surface-1 border border-subtle rounded-xl">
+                      {[3, 4, 5].map(c => (
+                        <button
+                          key={c}
+                          onClick={() => setNColors(c)}
+                          className={`flex-1 py-1.5 rounded-lg text-sm font-mono transition-all duration-200 ${
+                            nColors === c ? 'bg-accent-blue text-white shadow-[0_2px_8px_rgba(59,130,246,0.3)]' : 'text-text-secondary hover:bg-surface-2 hover:text-white'
+                          }`}
+                        >
+                          {c}
+                        </button>
+                      ))}
+                    </div>
+                  </motion.div>
+                )}
+                {problem === 'cryptarithmetic' && (
+                  <motion.div
+                    key="crypto-config"
+                    initial={{ opacity: 0, y: 4 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -4 }}
+                    className="flex flex-col gap-2.5"
+                  >
+                    <span className="text-[11px] uppercase tracking-wider text-text-tertiary font-medium">Expression</span>
+                    <div className="flex flex-col gap-2 bg-surface-1 p-3 rounded-xl border border-subtle text-xs font-mono">
+                      <div className="flex items-center gap-2">
+                         <span className="w-8 text-text-tertiary text-right">+</span>
+                         <input value={cryptoWords.word1} onChange={e => setCryptoWords({...cryptoWords, word1: e.target.value.toUpperCase()})} className="bg-surface-3 text-white px-2 py-1 rounded w-full outline-none focus:border-accent-blue border border-transparent transition-colors" />
+                      </div>
+                      <div className="flex items-center gap-2">
+                         <span className="w-8 text-text-tertiary text-right">+</span>
+                         <input value={cryptoWords.word2} onChange={e => setCryptoWords({...cryptoWords, word2: e.target.value.toUpperCase()})} className="bg-surface-3 text-white px-2 py-1 rounded w-full outline-none focus:border-accent-blue border border-transparent transition-colors" />
+                      </div>
+                      <div className="h-[1px] bg-surface-3 w-full my-1"></div>
+                      <div className="flex items-center gap-2">
+                         <span className="w-8 text-text-tertiary text-right">=</span>
+                         <input value={cryptoWords.resultWord} onChange={e => setCryptoWords({...cryptoWords, resultWord: e.target.value.toUpperCase()})} className="bg-surface-3 text-accent-blue font-bold px-2 py-1 rounded w-full outline-none focus:border-accent-blue border border-transparent transition-colors" />
+                      </div>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
 
             {/* Technique Toggles */}
-            <div className="flex flex-col gap-1">
-              <span className="text-[11px] uppercase tracking-wider text-text-tertiary font-medium mb-1">Techniques</span>
-              <Toggle label="Backtracking" enabled locked />
-              <Toggle label="Forward Checking" enabled={toggles.forwardChecking} onChange={() => setToggles(t => ({ ...t, forwardChecking: !t.forwardChecking }))} />
-              <Toggle label="MRV Heuristic" enabled={toggles.mrv} onChange={() => setToggles(t => ({ ...t, mrv: !t.mrv }))} />
-              <Toggle label="LCV Heuristic" enabled={toggles.lcv} onChange={() => setToggles(t => ({ ...t, lcv: !t.lcv }))} />
-              <Toggle label="Arc Consistency" enabled={toggles.ac3} onChange={() => setToggles(t => ({ ...t, ac3: !t.ac3 }))} />
+            <div className="flex flex-col gap-1.5">
+              <span className="text-[11px] uppercase tracking-wider text-text-tertiary font-medium mb-1">Constraints & Heuristics</span>
+              <div className="bg-surface-1 border border-subtle rounded-xl overflow-hidden flex flex-col p-1">
+                <Toggle label="Backtracking Engine" enabled locked />
+                <Toggle label="Forward Checking" enabled={toggles.forwardChecking} onChange={() => setToggles(t => ({ ...t, forwardChecking: !t.forwardChecking }))} />
+                <Toggle label="MRV Variable Ordering" enabled={toggles.mrv} onChange={() => setToggles(t => ({ ...t, mrv: !t.mrv }))} />
+                <Toggle label="LCV Value Ordering" enabled={toggles.lcv} onChange={() => setToggles(t => ({ ...t, lcv: !t.lcv }))} />
+                <Toggle label="AC-3 Arc Consistency" enabled={toggles.ac3} onChange={() => setToggles(t => ({ ...t, ac3: !t.ac3 }))} />
+              </div>
             </div>
 
             {/* Speed */}
-            <div className="flex flex-col gap-2">
-              <span className="text-[11px] uppercase tracking-wider text-text-tertiary font-medium">Speed</span>
+            <div className="flex flex-col gap-2.5">
+              <span className="text-[11px] uppercase tracking-wider text-text-tertiary font-medium">Execution Velocity</span>
               <input
                 type="range" min={1} max={100} value={speed}
                 onChange={e => setSpeed(Number(e.target.value))}
-                className="w-full accent-accent-blue h-1 bg-surface-3 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3.5 [&::-webkit-slider-thumb]:h-3.5 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-accent-blue"
+                className="w-full accent-accent-blue h-1.5 bg-surface-3 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-accent-blue"
               />
             </div>
 
             {/* Actions */}
-            <div className="flex flex-col gap-2">
+            <div className="flex flex-col gap-3 mt-auto">
               <button
                 onClick={handleSolve}
                 disabled={isSolving}
-                className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-accent-blue hover:bg-accent-blue/90 text-white text-sm font-medium rounded-xl transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-white text-black hover:bg-neutral-200 text-sm font-medium rounded-xl transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed shadow-[0_0_20px_rgba(255,255,255,0.1)]"
               >
                 {isSolving ? (
                   <>
-                    <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                    Solving…
+                    <div className="w-4 h-4 border-2 border-black/30 border-t-black rounded-full animate-spin" />
+                    Executing CSP...
                   </>
                 ) : (
                   <>
-                    <Play size={15} />
-                    Solve
+                    <Play size={16} fill="currentColor" />
+                    Initialize Solver
                   </>
                 )}
               </button>
@@ -734,83 +582,90 @@ export default function ConstraintIntelligenceLabPage() {
                 <div className="flex gap-2">
                   <button
                     onClick={togglePlayback}
-                    className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 bg-surface-2 hover:bg-surface-3 text-text-secondary hover:text-white text-xs rounded-xl transition-all duration-200"
+                    className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 bg-surface-2 hover:bg-surface-3 text-white text-xs font-medium tracking-wide rounded-xl transition-all duration-200 border border-subtle"
                   >
-                    {isPlaying ? <Pause size={13} /> : <Play size={13} />}
-                    {isPlaying ? 'Pause' : 'Play'}
+                    {isPlaying ? <Pause size={14} fill="currentColor" /> : <Play size={14} fill="currentColor" />}
+                    {isPlaying ? 'PAUSE' : 'PLAY'}
                   </button>
                   <button
                     onClick={() => { stopPlayback(); setCurrentStep(prev => Math.min(prev + 1, (result?.steps.length ?? 1) - 1)); }}
-                    className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 bg-surface-2 hover:bg-surface-3 text-text-secondary hover:text-white text-xs rounded-xl transition-all duration-200"
+                    className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 bg-surface-2 hover:bg-surface-3 text-white text-xs font-medium tracking-wide rounded-xl transition-all duration-200 border border-subtle"
                   >
-                    <SkipForward size={13} />
-                    Step
+                    <SkipForward size={14} fill="currentColor" />
+                    STEP
+                  </button>
+                  <button
+                    onClick={handleReset}
+                    className="flex items-center justify-center gap-1.5 px-3 py-2 bg-surface-2 hover:bg-surface-3 text-white text-xs font-medium rounded-xl transition-all duration-200 border border-subtle"
+                  >
+                    <RotateCcw size={14} />
                   </button>
                 </div>
-              )}
-
-              {result && (
-                <button
-                  onClick={handleReset}
-                  className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-surface-2 hover:bg-surface-3 text-text-secondary hover:text-white text-sm rounded-xl transition-all duration-200"
-                >
-                  <RotateCcw size={14} />
-                  Reset
-                </button>
               )}
             </div>
           </div>
         </aside>
 
         {/* ── Center + Right ── */}
-        <div className="flex-1 flex flex-col overflow-hidden">
+        <div className="flex-1 flex flex-col overflow-hidden bg-surface-0 relative">
+          
+          {/* Subtle Grid Background */}
+          <div className="absolute inset-0 bg-grid opacity-10 pointer-events-none" />
 
           {/* Center + Right Row */}
-          <div className="flex-1 flex overflow-hidden">
+          <div className="flex-1 flex overflow-hidden z-10">
 
             {/* Center Visualization */}
-            <div className="flex-1 flex items-center justify-center p-6 overflow-auto">
+            <div className="flex-1 flex items-center justify-center p-8 overflow-auto relative">
               <AnimatePresence mode="wait">
                 {!result ? (
                   <motion.div
                     key="empty"
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                    className="flex flex-col items-center gap-4 text-text-tertiary"
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -10 }}
+                    className="flex flex-col items-center gap-5 text-text-tertiary max-w-sm text-center"
                   >
-                    <div className="w-16 h-16 rounded-2xl bg-surface-2 border-subtle flex items-center justify-center">
-                      {problem === 'nqueens' && <Grid3X3 size={28} className="text-text-tertiary" />}
-                      {problem === 'coloring' && <Palette size={28} className="text-text-tertiary" />}
-                      {problem === 'timetable' && <CalendarClock size={28} className="text-text-tertiary" />}
+                    <div className="w-20 h-20 rounded-3xl bg-surface-1/50 border border-subtle flex items-center justify-center shadow-xl backdrop-blur-md">
+                      {problem === 'nqueens' && <Grid3X3 size={32} className="text-text-secondary" />}
+                      {problem === 'coloring' && <Palette size={32} className="text-text-secondary" />}
+                      {problem === 'timetable' && <CalendarClock size={32} className="text-text-secondary" />}
+                      {problem === 'cryptarithmetic' && <Keyboard size={32} className="text-text-secondary" />}
                     </div>
-                    <div className="text-center">
-                      <p className="text-sm text-text-secondary">Select options and press Solve</p>
-                      <p className="text-xs text-text-tertiary mt-1">
-                        {problem === 'nqueens' && `Place ${nQueensSize} queens on a ${nQueensSize}×${nQueensSize} board`}
-                        {problem === 'coloring' && `Color the map of Australia with ${nColors} colors`}
-                        {problem === 'timetable' && 'Schedule 5 courses across rooms and timeslots'}
-                      </p>
+                    <div>
+                      <h3 className="text-white font-medium text-lg tracking-wide mb-2">Awaiting Parameters</h3>
+                      <p className="text-sm text-text-secondary leading-relaxed">Configure the constraint environment on the left and initialize the solver to visualize the logic tree.</p>
                     </div>
                   </motion.div>
                 ) : (
                   <motion.div
                     key="viz"
-                    initial={{ opacity: 0, scale: 0.97 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    exit={{ opacity: 0, scale: 0.97 }}
-                    className="w-full h-full"
+                    initial={{ opacity: 0, scale: 0.95, filter: 'blur(10px)' }}
+                    animate={{ opacity: 1, scale: 1, filter: 'blur(0px)' }}
+                    exit={{ opacity: 0, scale: 0.95, filter: 'blur(10px)' }}
+                    transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+                    className="w-full h-full flex items-center justify-center"
                   >
                     {problem === 'nqueens' && (
-                      <NQueensBoard n={nQueensSize} assignments={currentAssignments} conflicts={nqueensConflicts} />
+                      <NQueensBoard n={nQueensSize} assignments={currentAssignments} conflicts={nqueensConflicts} mode={appMode} />
                     )}
                     {problem === 'coloring' && (
-                      <GraphColoringViz assignments={currentAssignments} edges={DEFAULT_GRAPH_EDGES} />
+                      <GraphColoringViz assignments={currentAssignments} edges={DEFAULT_GRAPH_EDGES} nodes={DEFAULT_GRAPH_NODES} mode={appMode} />
                     )}
                     {problem === 'timetable' && (
                       <TimetableGrid
                         assignments={currentAssignments}
                         courses={['CS101', 'CS201', 'MATH101', 'PHYS101', 'ENG101']}
+                        mode={appMode}
+                      />
+                    )}
+                    {problem === 'cryptarithmetic' && (
+                      <CryptarithmeticViz
+                        assignments={currentAssignments}
+                        mode={appMode}
+                        word1={cryptoWords.word1}
+                        word2={cryptoWords.word2}
+                        resultWord={cryptoWords.resultWord}
                       />
                     )}
                   </motion.div>
@@ -819,12 +674,12 @@ export default function ConstraintIntelligenceLabPage() {
             </div>
 
             {/* Right Panel */}
-            <aside className="w-72 flex-shrink-0 border-l border-[rgba(255,255,255,0.06)] bg-surface-0 overflow-y-auto p-4 flex flex-col gap-4">
+            <aside className="w-80 flex-shrink-0 border-l border-[rgba(255,255,255,0.06)] bg-surface-0/80 backdrop-blur-xl overflow-y-auto p-5 flex flex-col gap-6 shadow-[-4px_0_24px_rgba(0,0,0,0.2)]">
 
               {/* Metrics */}
               <div className="flex flex-col gap-2">
-                <span className="text-[11px] uppercase tracking-wider text-text-tertiary font-medium">Metrics</span>
-                <div className="grid grid-cols-2 gap-2">
+                <span className="text-[11px] uppercase tracking-wider text-text-tertiary font-medium">Solver Telemetry</span>
+                <div className="grid grid-cols-2 gap-3">
                   <MetricCard
                     label="Backtracks"
                     value={result?.metrics.backtracks ?? '—'}
@@ -841,8 +696,8 @@ export default function ConstraintIntelligenceLabPage() {
                     icon={<Zap size={12} />}
                   />
                   <MetricCard
-                    label="Time"
-                    value={result ? `${result.metrics.executionMs.toFixed(1)}ms` : '—'}
+                    label="Time (ms)"
+                    value={result ? result.metrics.executionMs.toFixed(1) : '—'}
                     icon={<Clock size={12} />}
                   />
                 </div>
@@ -850,30 +705,63 @@ export default function ConstraintIntelligenceLabPage() {
 
               {/* Algorithm Badge */}
               {result && (
-                <div className="bg-surface-1 border-subtle rounded-xl p-3 flex flex-col gap-1">
-                  <span className="text-[11px] uppercase tracking-wider text-text-tertiary font-medium">Algorithm</span>
-                  <span className="text-xs font-mono text-accent-blue">{result.algorithm}</span>
-                  <span className={`text-xs font-mono mt-1 ${result.solution ? 'text-accent-green' : 'text-accent-red'}`}>
-                    {result.solution ? '✓ Solution found' : '✗ No solution'}
-                  </span>
+                <div className="bg-surface-1 border border-subtle rounded-xl p-4 flex flex-col gap-2 shadow-sm">
+                  <span className="text-[11px] uppercase tracking-wider text-text-tertiary font-medium">Solver Details</span>
+                  <div className="flex justify-between items-end">
+                    <span className="text-sm font-mono text-white tracking-wide">{result.algorithm}</span>
+                    <span className={`text-[10px] uppercase font-bold tracking-widest px-2 py-0.5 rounded-sm ${result.solution ? 'bg-accent-green/20 text-accent-green' : 'bg-accent-red/20 text-accent-red'}`}>
+                      {result.solution ? 'SOLUTION FOUND' : 'FAILED'}
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {/* Current Operation (Information Density Task) */}
+              {currentStepData && (
+                <div className="flex flex-col gap-2 bg-surface-1 border border-subtle rounded-xl p-4 shadow-sm">
+                  <span className="text-[11px] uppercase tracking-wider text-text-tertiary font-medium">Current Operation</span>
+                  <div className="flex flex-col gap-2 mt-1">
+                    <div className="flex justify-between items-center text-xs">
+                       <span className="text-text-secondary">Variable</span>
+                       <span className="font-mono text-white bg-surface-2 px-1.5 py-0.5 rounded">{currentStepData.variable}</span>
+                    </div>
+                    <div className="flex justify-between items-center text-xs">
+                       <span className="text-text-secondary">Domain Size</span>
+                       <span className="font-mono text-white">{currentStepData.domains[currentStepData.variable]?.length ?? '—'}</span>
+                    </div>
+                    <div className="flex justify-between items-center text-xs">
+                       <span className="text-text-secondary">Action</span>
+                       <span className={`font-mono ${
+                         currentStepData.action === 'assign' ? 'text-accent-blue' :
+                         currentStepData.action === 'backtrack' ? 'text-accent-red' :
+                         currentStepData.action === 'prune' ? 'text-accent-amber' :
+                         'text-accent-green'
+                       }`}>{currentStepData.action.toUpperCase()}</span>
+                    </div>
+                    <div className="mt-1 pt-2 border-t border-[rgba(255,255,255,0.06)]">
+                       <p className="text-[10px] text-text-tertiary leading-relaxed">{currentStepData.reason}</p>
+                    </div>
+                  </div>
                 </div>
               )}
 
               {/* CSP State */}
               {result && variables.length > 0 && (
-                <CSPStatePanel
-                  variables={variables}
-                  domains={currentDomains}
-                  assignments={currentAssignments}
-                />
+                <div className="flex-1 min-h-0">
+                  <CSPStatePanel
+                    variables={variables}
+                    domains={currentDomains}
+                    assignments={currentAssignments}
+                  />
+                </div>
               )}
 
               {/* Step Slider */}
               {result && result.steps.length > 0 && (
-                <div className="flex flex-col gap-2">
+                <div className="flex flex-col gap-2 bg-surface-1 p-3 border border-subtle rounded-xl">
                   <div className="flex items-center justify-between">
-                    <span className="text-[11px] uppercase tracking-wider text-text-tertiary font-medium">Step</span>
-                    <span className="text-[11px] font-mono text-text-tertiary">
+                    <span className="text-[11px] uppercase tracking-wider text-text-tertiary font-medium">Timeline Position</span>
+                    <span className="text-[11px] font-mono text-accent-purple font-medium">
                       {Math.max(0, currentStep + 1)} / {result.steps.length}
                     </span>
                   </div>
@@ -883,7 +771,7 @@ export default function ConstraintIntelligenceLabPage() {
                     max={result.steps.length - 1}
                     value={Math.max(0, currentStep)}
                     onChange={e => { stopPlayback(); setCurrentStep(Number(e.target.value)); }}
-                    className="w-full accent-accent-purple h-1 bg-surface-3 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3.5 [&::-webkit-slider-thumb]:h-3.5 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-accent-purple"
+                    className="w-full accent-accent-purple h-1.5 bg-surface-3 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-accent-purple [&::-webkit-slider-thumb]:shadow-[0_0_10px_rgba(168,85,247,0.5)] mt-1"
                   />
                 </div>
               )}
@@ -891,7 +779,7 @@ export default function ConstraintIntelligenceLabPage() {
           </div>
 
           {/* Bottom: Reasoning Timeline */}
-          <div className="h-[240px] flex-shrink-0 border-t border-[rgba(255,255,255,0.06)]">
+          <div className="z-20">
             <ReasoningTimeline steps={result?.steps ?? []} currentStep={currentStep} />
           </div>
         </div>

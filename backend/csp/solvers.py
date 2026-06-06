@@ -194,13 +194,15 @@ def create_timetabling():
         
     return variables, domains, [check_conflicts]
 
-def create_cryptarithmetic():
+def create_cryptarithmetic(word1="SEND", word2="MORE", result_word="MONEY"):
     # SEND + MORE = MONEY
-    variables = ['S', 'E', 'N', 'D', 'M', 'O', 'R', 'Y']
+    variables = list(set(word1 + word2 + result_word))
     domains = {v: list(range(10)) for v in variables}
-    # S and M cannot be 0
-    domains['S'] = list(range(1, 10))
-    domains['M'] = list(range(1, 10))
+    
+    # First letters cannot be 0
+    for w in [word1, word2, result_word]:
+        if w[0] in domains and 0 in domains[w[0]]:
+            domains[w[0]].remove(0)
     
     def check_crypto(assignment):
         # All-diff constraint
@@ -210,11 +212,11 @@ def create_cryptarithmetic():
             
         # Equation constraint if all assigned
         if len(assignment) == len(variables):
-            send = assignment['S']*1000 + assignment['E']*100 + assignment['N']*10 + assignment['D']
-            more = assignment['M']*1000 + assignment['O']*100 + assignment['R']*10 + assignment['E']
-            money = assignment['M']*10000 + assignment['O']*1000 + assignment['N']*100 + assignment['E']*10 + assignment['Y']
-            if send + more != money:
-                return {"satisfied": False, "violated": "SEND + MORE != MONEY"}
+            def word_val(w):
+                return sum(assignment[c] * (10 ** i) for i, c in enumerate(reversed(w)))
+                
+            if word_val(word1) + word_val(word2) != word_val(result_word):
+                return {"satisfied": False, "violated": f"{word1} + {word2} != {result_word}"}
                 
         return {"satisfied": True}
         

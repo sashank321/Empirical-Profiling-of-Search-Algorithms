@@ -20,7 +20,10 @@ def execute_csp():
     elif problem_type == 'timetabling':
         variables, domains, constraints = create_timetabling()
     elif problem_type == 'cryptarithmetic':
-        variables, domains, constraints = create_cryptarithmetic()
+        word1 = data.get('word1', 'SEND')
+        word2 = data.get('word2', 'MORE')
+        result_word = data.get('result_word', 'MONEY')
+        variables, domains, constraints = create_cryptarithmetic(word1, word2, result_word)
     else:
         return jsonify({"error": f"Unknown CSP problem: {problem_type}"}), 400
 

@@ -471,3 +471,53 @@ export const DEFAULT_GRAPH_EDGES: [string, string][] = [
   ['WA', 'NT'], ['WA', 'SA'], ['NT', 'SA'], ['NT', 'Q'],
   ['SA', 'Q'], ['SA', 'NSW'], ['SA', 'V'], ['Q', 'NSW'], ['NSW', 'V'],
 ];
+
+/* ── Cryptarithmetic ── */
+
+export function createCryptarithmetic(word1: string, word2: string, resultWord: string): CSPSetup {
+  const letters = Array.from(new Set((word1 + word2 + resultWord).split('')));
+  const variables = letters;
+  const domains: Record<string, number[]> = {};
+
+  for (const v of variables) {
+    domains[v] = Array.from({ length: 10 }, (_, i) => i);
+  }
+
+  // First letters cannot be 0
+  for (const w of [word1, word2, resultWord]) {
+    if (domains[w[0]]) {
+      domains[w[0]] = domains[w[0]].filter((d) => d !== 0);
+    }
+  }
+
+  const isConsistent = (assignments: Record<string, number>): { satisfied: boolean; violated?: string } => {
+    const vals = Object.values(assignments);
+    const uniqueVals = new Set(vals);
+
+    if (vals.length !== uniqueVals.size) {
+      return { satisfied: false, violated: 'Alldiff violated' };
+    }
+
+    if (vals.length === variables.length) {
+      const getVal = (w: string) => {
+        let num = 0;
+        for (let i = 0; i < w.length; i++) {
+          num = num * 10 + assignments[w[i]];
+        }
+        return num;
+      };
+      
+      const v1 = getVal(word1);
+      const v2 = getVal(word2);
+      const v3 = getVal(resultWord);
+
+      if (v1 + v2 !== v3) {
+        return { satisfied: false, violated: `${word1} + ${word2} != ${resultWord}` };
+      }
+    }
+
+    return { satisfied: true };
+  };
+
+  return { variables, domains, isConsistent };
+}
