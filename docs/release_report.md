@@ -40,4 +40,4 @@ All four interactive intelligence labs have been manually verified:
 - **ESLint**: Passed cleanly.
 
 ## Deployment Status
-- **Vercel**: Pending authentication.
+- **Vercel**: Successfully deployed to production at [https://empirical.vercel.app](https://empirical.vercel.app).
